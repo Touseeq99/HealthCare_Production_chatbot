@@ -7,7 +7,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from typing import Dict, Any
 import memcache
-
+import os
 from utils.logger import logger, setup_logging
 from config import settings
 from api import (auth, patient_chat, admin , doctor_chat)
