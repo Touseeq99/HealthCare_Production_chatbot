@@ -57,7 +57,6 @@ class UserCreate(BaseModel):
     role: str
     phone: Optional[str] = None
     specialization: Optional[str] = None
-    license_number: Optional[str] = None
     doctor_register_number: Optional[str] = None
 
 class UserResponse(BaseModel):
@@ -197,7 +196,6 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
             role=user.role,
             phone=user.phone or None,
             specialization=user.specialization or None,
-            license_number=user.license_number or None,
             doctor_register_number=user.doctor_register_number or None
         )
         db.add(db_user)
