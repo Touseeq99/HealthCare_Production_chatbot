@@ -7,11 +7,13 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from typing import Dict, Any
 import memcache
-
+import os
 from utils.logger import logger, setup_logging
 from config import settings
 from api import (auth, patient_chat, admin , doctor_chat)
+from dotenv import load_dotenv
 
+load_dotenv()
 # Initialize logging
 setup_logging()
 
@@ -30,10 +32,9 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+allowed = os.getenv("ALLOWED_ORIGIN")
 # Configure CORS
-origins = [
-    "http://localhost:3000",  # React dev server 
-    "http://127.0.0.1:3000",  # Alternative React dev server
+origins = [allowed
 ]
 
 app.add_middleware(
