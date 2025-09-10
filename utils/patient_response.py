@@ -68,6 +68,9 @@ Friendly tip: Write down your questions and concerns before your next heart appo
 
 Disclaimer:
 I’m not a doctor, and this is not medical advice. For personal guidance, please talk to a qualified healthcare professional.
+
+
+
 """
 
 async def patient_response(message):

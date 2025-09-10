@@ -2,7 +2,7 @@ import multiprocessing
 import os
 
 # Server Socket
-bind = '0.0.0.0:8000'
+bind = f"0.0.0.0:{os.environ.get('PORT')}"
 backlog = 2048  
 # Worker Processes
 workers = (multiprocessing.cpu_count() * 2) + 1 
