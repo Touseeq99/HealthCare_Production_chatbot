@@ -233,7 +233,7 @@ def register(user: UserCreate, db: Session = Depends(get_db)):
             "message": f"Registration failed: {str(e)}"
         }
 
-@router.post("/login", response_model=LoginResponse)
+@router.post("/token", response_model=LoginResponse)
 async def login_for_access_token(
     request: Request,
     login_data: LoginRequest, 

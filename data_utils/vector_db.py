@@ -1,14 +1,66 @@
-from pinecone import Pinecone, ServerlessSpec
+import logging
+import time
+from typing import Optional, Tuple
+from pinecone import Pinecone, ServerlessSpec, PineconeException
 from dotenv import load_dotenv
 import os
 
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 # Load environment variables
 load_dotenv()
-pinecone_api_key = os.getenv("PINECONE_API_KEY")
-pc = Pinecone(api_key=pinecone_api_key)
+
+# Initialize Pinecone client with retry mechanism
+def init_pinecone() -> Tuple[bool, Optional[Pinecone]]:
+    """
+    Initialize Pinecone client with retry mechanism.
+    
+    Returns:
+        Tuple[bool, Optional[Pinecone]]: (success, pc) where success is a boolean
+        indicating if initialization was successful, and pc is the Pinecone client instance.
+    """
+    pinecone_api_key = os.getenv("PINECONE_API_KEY")
+    
+    if not pinecone_api_key:
+        logger.error("PINECONE_API_KEY not found in environment variables")
+        return False, None
+    
+    max_retries = 3
+    retry_delay = 2  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            pc = Pinecone(api_key=pinecone_api_key)
+            # Test the connection
+            pc.list_indexes()
+            logger.info("Successfully connected to Pinecone")
+            return True, pc
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(
+                    f"Attempt {attempt + 1} failed to connect to Pinecone. "
+                    f"Retrying in {retry_delay} seconds... Error: {str(e)}"
+                )
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+            else:
+                logger.error(
+                    f"Failed to connect to Pinecone after {max_retries} attempts. "
+                    f"Last error: {str(e)}"
+                )
+                return False, None
+    
+    return False, None
+
+# Initialize Pinecone
+pinecone_initialized, pc = init_pinecone()
+if not pinecone_initialized:
+    logger.warning("Pinecone initialization failed. Vector search functionality will be disabled.")
 
 # Index names
-DOCTOR_INDEX = "doctorindex"
+DOCTOR_INDEX = "doctorfinalindex"
 PATIENT_INDEX = "patientindex"
 EMBEDDING_DIMENSION = 1536  # Default dimension for OpenAI embeddings
 

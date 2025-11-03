@@ -38,29 +38,59 @@ def flatten_metadata(metadata):
                 flat_metadata[f"{key}_{subkey}"] = subvalue
     return flat_metadata
 
-def ingestion_docs_doctor(file: str):
+def ingestion_docs_doctor(file: str, rating_metadata: dict = None):
+    """
+    Ingest a document into the vector database with only rating metadata.
+    
+    Args:
+        file (str): Path to the document file
+        rating_metadata (dict, optional): Rating metadata from the rater.
+            Should contain 'scores' and 'metadata' keys.
+    """
     try:
         logger.info(f"Processing file: {file}")
         chunks = chunker.chunk_pdf(file)
+        
+        # Prepare rating metadata if provided
+        rating_meta = {}
+        if rating_metadata:
+            # Add overall metadata
+            rating_meta.update({
+                'total_score': rating_metadata.get('metadata', {}).get('total_score'),
+                'confidence': rating_metadata.get('metadata', {}).get('confidence'),
+                'rating_keywords': ', '.join(rating_metadata.get('metadata', {}).get('Keywords', [])),
+                'rating_comments': ' | '.join(rating_metadata.get('metadata', {}).get('comments', [])),
+                'rating_penalties': ' | '.join(rating_metadata.get('metadata', {}).get('penalties', [])),
+                'is_rated': True,
+                'rating_source': 'CLARA-2'
+            })
+            
+            # Add individual scores
+            for score in rating_metadata.get('scores', []):
+                category = score.get('category', '').lower().replace(' ', '_')
+                rating_meta.update({
+                    f'score_{category}': score.get('score'),
+                    f'rationale_{category}': score.get('rationale', '')[:500]  # Limit rationale length
+                })
+        else:
+            rating_meta['is_rated'] = False
+        
         for chunk in chunks:
-            flat_metadata = flatten_metadata(chunk['metadata'])
+            # Create document with only rating metadata
             doc = Document(
                 page_content=chunk['text'],
-                metadata=flat_metadata
+                metadata=rating_meta.copy()  # Use a copy to avoid reference issues
             )
-            logger.info(f"Adding chunk to vector database: {flat_metadata}")
+            logger.debug(f"Adding chunk to vector database with rating metadata: {rating_meta}")
             vector_Db_doc.add_documents([doc])
     except Exception as e:
         print(f"Error: {str(e)}")
         import traceback
         traceback.print_exc()
+ 
 
 
 
-
-
-if __name__ == "__main__":
-    ingestion_docs_doctor("C:\\Users\\user\\Desktop\\metamed_backend\\AHAACC2023Guidelines.pdf")
 
 
         

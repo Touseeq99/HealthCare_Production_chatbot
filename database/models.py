@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, String, DateTime, Enum, Text, ForeignKey, JSON, Integer
+from sqlalchemy import Column, String, DateTime, Enum, Text, ForeignKey, JSON, Integer, Boolean
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 
@@ -49,3 +49,57 @@ class ChatSession(Base):
 
     # Relationships
     user = relationship("User", back_populates="chat_sessions")
+
+
+class ResearchPaper(Base):
+    __tablename__ = 'research_papers'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    file_name = Column(String, nullable=False)
+    total_score = Column(Integer, nullable=False)
+    confidence = Column(Integer, nullable=False)  # Stored as integer (0-100)
+    paper_type = Column(String, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    scores = relationship("ResearchPaperScore", back_populates="research_paper", cascade="all, delete-orphan")
+    keywords = relationship("ResearchPaperKeyword", back_populates="research_paper", cascade="all, delete-orphan")
+    comments = relationship("ResearchPaperComment", back_populates="research_paper", cascade="all, delete-orphan")
+
+
+class ResearchPaperScore(Base):
+    __tablename__ = 'research_paper_scores'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    research_paper_id = Column(Integer, ForeignKey('research_papers.id'), nullable=False)
+    category = Column(String, nullable=False)  # e.g., 'Study Design', 'Sample Size Power'
+    score = Column(Integer, nullable=False)
+    rationale = Column(Text, nullable=False)
+    max_score = Column(Integer, nullable=False, default=10)  # For flexibility in scoring systems
+    
+    # Relationships
+    research_paper = relationship("ResearchPaper", back_populates="scores")
+
+
+class ResearchPaperKeyword(Base):
+    __tablename__ = 'research_paper_keywords'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    research_paper_id = Column(Integer, ForeignKey('research_papers.id'), nullable=False)
+    keyword = Column(String, nullable=False)
+    
+    # Relationships
+    research_paper = relationship("ResearchPaper", back_populates="keywords")
+
+
+class ResearchPaperComment(Base):
+    __tablename__ = 'research_paper_comments'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    research_paper_id = Column(Integer, ForeignKey('research_papers.id'), nullable=False)
+    comment = Column(Text, nullable=False)
+    is_penalty = Column(Boolean, default=False, nullable=False)
+    
+    # Relationships
+    research_paper = relationship("ResearchPaper", back_populates="comments")

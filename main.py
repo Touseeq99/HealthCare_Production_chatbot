@@ -10,7 +10,7 @@ import memcache
 import os
 from utils.logger import logger, setup_logging
 from config import settings
-from api import (auth, patient_chat, admin , doctor_chat)
+from api import (auth, patient_chat, admin, doctor_chat, evidence)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -39,7 +39,7 @@ origins = [allowed
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -48,7 +48,8 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
-app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(evidence.router)
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"]) 
 app.include_router(patient_chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(doctor_chat.router , prefix="/api/chat", tags=["chat"])
 
