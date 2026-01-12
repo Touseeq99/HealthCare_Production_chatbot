@@ -7,7 +7,6 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from utils.rate_limit_handler import rate_limit_exceeded_handler
 from typing import Dict, Any
-import memcache
 import os
 from utils.logger import logger, setup_logging
 from config import settings
@@ -21,9 +20,6 @@ setup_logging()
 
 # Setup cache invalidation listeners
 setup_cache_listeners()
-
-# Initialize memcached for rate limiting and account lockout
-mc = memcache.Client(['127.0.0.1:11211'], debug=0)
 
 # Initialize FastAPI with rate limiting
 app = FastAPI(

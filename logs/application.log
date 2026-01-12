@@ -348,3 +348,7 @@
 {"asctime": "2026-01-13 00:52:41", "levelname": "WARNING", "name": "utils.evidence_cache", "message": "Evidence cache service initialized without Redis (caching disabled)", "timestamp": "2026-01-12T19:52:41.575322+00:00"}
 {"asctime": "2026-01-13 00:52:41", "levelname": "INFO", "name": "root", "message": "Token blacklist initialized with database backend", "timestamp": "2026-01-12T19:52:41.813284+00:00"}
 {"asctime": "2026-01-13 00:52:42", "levelname": "INFO", "name": "utils.cache_invalidation", "message": "Cache invalidation event listeners setup complete", "timestamp": "2026-01-12T19:52:42.050685+00:00"}
+{"asctime": "2026-01-13 01:07:54", "levelname": "WARNING", "name": "root", "message": "Redis connection failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.. Using database fallback for account locking.", "timestamp": "2026-01-12T20:07:54.458255+00:00"}
+{"asctime": "2026-01-13 01:07:54", "levelname": "WARNING", "name": "utils.evidence_cache", "message": "Evidence cache service initialized without Redis (caching disabled)", "timestamp": "2026-01-12T20:07:54.463666+00:00"}
+{"asctime": "2026-01-13 01:07:54", "levelname": "INFO", "name": "root", "message": "Token blacklist initialized with database backend", "timestamp": "2026-01-12T20:07:54.956472+00:00"}
+{"asctime": "2026-01-13 01:07:55", "levelname": "INFO", "name": "utils.cache_invalidation", "message": "Cache invalidation event listeners setup complete", "timestamp": "2026-01-12T20:07:55.255735+00:00"}
