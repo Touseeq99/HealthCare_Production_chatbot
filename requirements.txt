@@ -21,7 +21,7 @@ boto3>=1.26.0
 python-dotenv>=1.0.0
 requests>=2.28.0
 bcrypt==4.3.0
-
+memcache
 # Testing dependencies
 pytest>=7.0.0
 pytest-cov>=4.0.0
