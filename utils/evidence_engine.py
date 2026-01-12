@@ -1,8 +1,10 @@
 from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
-from sqlalchemy.orm import Session, Query
+from sqlalchemy.orm import Session, Query, joinedload
 from sqlalchemy import and_, or_, func
 from database.models import ResearchPaper, ResearchPaperScore, ResearchPaperKeyword, ResearchPaperComment
+from utils.evidence_cache import cached_evidence_query, cached_count_query
+from utils.performance_monitor import monitor_performance, log_database_query
 
 def build_evidence_query(
     db: Session,
@@ -133,9 +135,18 @@ def build_evidence_query(
     # Order by most recent first
     query = query.order_by(ResearchPaper.created_at.desc())
     
+    # Eager load relationships to prevent N+1 queries
+    query = query.options(
+        joinedload(ResearchPaper.scores),
+        joinedload(ResearchPaper.keywords),
+        joinedload(ResearchPaper.comments)
+    )
+    
     # Apply pagination
     return query.offset(skip).limit(limit)
 
+@monitor_performance
+@cached_evidence_query('search_results', ttl=1800)
 def get_evidence_with_details(
     db: Session,
     **filters
@@ -189,3 +200,183 @@ def get_evidence_with_details(
         result.append(paper_data)
     
     return result
+
+@cached_evidence_query('paper_details', ttl=1800)
+def get_paper_by_id(db: Session, paper_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Get a single research paper with all details by ID.
+    
+    Args:
+        db: SQLAlchemy database session
+        paper_id: ID of paper to retrieve
+        
+    Returns:
+        Dictionary containing paper data with related scores, keywords, and comments
+    """
+    # Use eager loading to prevent N+1 queries
+    paper = (db.query(ResearchPaper)
+               .options(
+                   joinedload(ResearchPaper.scores),
+                   joinedload(ResearchPaper.keywords),
+                   joinedload(ResearchPaper.comments)
+               )
+               .filter(ResearchPaper.id == paper_id)
+               .first())
+    
+    if not paper:
+        return None
+    
+    paper_data = {
+        'id': paper.id,
+        'file_name': paper.file_name,
+        'total_score': paper.total_score,
+        'confidence': paper.confidence,
+        'paper_type': paper.paper_type,
+        'created_at': paper.created_at.isoformat(),
+        'updated_at': paper.updated_at.isoformat(),
+        'scores': [],
+        'keywords': [],
+        'comments': []
+    }
+    
+    # Add scores (already loaded via joinedload)
+    for score in paper.scores:
+        paper_data['scores'].append({
+            'category': score.category,
+            'score': score.score,
+            'rationale': score.rationale,
+            'max_score': score.max_score
+        })
+        
+    # Add keywords (already loaded via joinedload)
+    paper_data['keywords'] = [kw.keyword for kw in paper.keywords]
+    
+    # Add comments (already loaded via joinedload)
+    for comment in paper.comments:
+        paper_data['comments'].append({
+            'comment': comment.comment,
+            'is_penalty': comment.is_penalty
+        })
+        
+    return paper_data
+
+@cached_count_query('count', ttl=300)
+def get_papers_count(db: Session, **filters) -> int:
+    """
+    Get count of research papers matching filters.
+    
+    Args:
+        db: SQLAlchemy database session
+        **filters: Filter arguments to pass to build_evidence_query
+        
+    Returns:
+        Count of matching papers
+    """
+    query = build_evidence_query(db, **filters)
+    return query.count()
+
+@cached_evidence_query('categories', ttl=3600)
+def get_all_categories(db: Session) -> List[str]:
+    """
+    Get all available score categories.
+    
+    Args:
+        db: SQLAlchemy database session
+        
+    Returns:
+        List of category names
+    """
+    categories = db.query(ResearchPaperScore.category)\
+                  .distinct()\
+                  .all()
+    return [str(c[0]) for c in categories if c[0] is not None]
+
+@cached_evidence_query('paper_types', ttl=3600)
+def get_all_paper_types(db: Session) -> List[str]:
+    """
+    Get all available paper types.
+    
+    Args:
+        db: SQLAlchemy database session
+        
+    Returns:
+        List of paper type names
+    """
+    paper_types = db.query(ResearchPaper.paper_type)\
+                   .distinct()\
+                   .all()
+    return [str(t[0]) for t in paper_types if t[0] is not None]
+
+@monitor_performance
+@cached_evidence_query('files', ttl=600)
+def get_files_with_pagination(
+    db: Session,
+    page: int = 1,
+    page_size: int = 10
+) -> Dict[str, Any]:
+    """
+    Get paginated list of all files.
+    
+    Args:
+        db: SQLAlchemy database session
+        page: Page number (1-based)
+        page_size: Number of items per page
+        
+    Returns:
+        Dictionary with items, total, page, page_size, total_pages
+    """
+    from sqlalchemy.orm import joinedload
+    
+    # Calculate pagination
+    offset = (page - 1) * page_size
+    
+    # Use a single query with subquery for better performance
+    # Get paginated results with relationships in one query
+    files_query = (db.query(ResearchPaper)
+                  .options(
+                      joinedload(ResearchPaper.keywords),
+                      joinedload(ResearchPaper.comments)
+                  )
+                  .order_by(ResearchPaper.created_at.desc())
+                  .offset(offset)
+                  .limit(page_size))
+    
+    # Execute query
+    files = files_query.all()
+    
+    # Get total count more efficiently using the same base query
+    total_query = db.query(func.count(ResearchPaper.id))
+    total = total_query.scalar()
+    
+    # Calculate total pages
+    total_pages = (total + page_size - 1) // page_size
+    
+    # Format the response
+    items = []
+    for file in files:
+        file_dict = {
+            'id': file.id,
+            'file_name': file.file_name,
+            'paper_type': file.paper_type,
+            'total_score': file.total_score,
+            'confidence': file.confidence,
+            'created_at': file.created_at,
+            'updated_at': file.updated_at,
+            'keywords': [kw.keyword for kw in file.keywords] if file.keywords else [],
+            'comments': [
+                {
+                    'id': c.id,
+                    'comment': c.comment,
+                    'is_penalty': c.is_penalty
+                } for c in file.comments
+            ] if file.comments else []
+        }
+        items.append(file_dict)
+    
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages
+    }

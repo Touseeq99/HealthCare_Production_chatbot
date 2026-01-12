@@ -1,0 +1,3 @@
+{"asctime": "2026-01-04 18:42:32", "levelname": "WARNING", "name": "root", "message": "Redis connection failed: Error 10061 connecting to localhost:6379. No connection could be made because the target machine actively refused it.. Using database fallback for account locking.", "timestamp": "2026-01-04T13:42:32.556801+00:00"}
+{"asctime": "2026-01-04 18:42:32", "levelname": "INFO", "name": "root", "message": "Token blacklist initialized with database backend", "timestamp": "2026-01-04T13:42:32.586478+00:00"}
+{"asctime": "2026-01-04 18:42:48", "levelname": "INFO", "name": "data_utils.vector_db", "message": "Successfully connected to Pinecone", "timestamp": "2026-01-04T13:42:48.611359+00:00"}

@@ -46,7 +46,7 @@ def query_doc(query: str):
             content_to_metadata[doc.page_content] = doc.metadata
         
         logger.info("Starting reranking...")
-        reranker = PineconeRerank()
+        reranker = PineconeRerank(top_n=5)
         
         reranked_docs = reranker.rerank(
             query=query,

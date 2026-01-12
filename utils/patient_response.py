@@ -1,9 +1,12 @@
 from openai import OpenAI
 from dotenv import load_dotenv
 import asyncio
+import logging
+import time
 
 load_dotenv()
 
+logger = logging.getLogger(__name__)
 client = OpenAI()
 
 prompt = """
@@ -73,29 +76,105 @@ I’m not a doctor, and this is not medical advice. For personal guidance, pleas
 
 """
 
-async def patient_response(message):
-    # Create a streaming chat completion
-    stream = client.chat.completions.create(
-        model="gpt-4o-mini",   # choose the model
-        messages=[
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": message}
-        ],
-        stream=True
-    )
-    
-    # Create an async generator
-    async def generate():
+async def patient_response(message, max_retries=3):
+    """Patient response with retry logic"""
+    # Retry logic for API failures
+    for attempt in range(max_retries):
         try:
-            for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content is not None:
-                    content = chunk.choices[0].delta.content
-                    # Ensure we're yielding string data
-                    if content:
-                        yield content
+            # Create a streaming chat completion
+            stream = client.chat.completions.create(
+                model="gpt-4o-mini",   # choose the model
+                messages=[
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": message}
+                ],
+                stream=True,
+                timeout=30.0,  # Add timeout
+                max_tokens=1000  # Limit response length
+            )
+            
+            # Create an async generator
+            async def generate():
+                try:
+                    for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content is not None:
+                            content = chunk.choices[0].delta.content
+                            # Ensure we're yielding string data
+                            if content:
+                                yield content
+                except Exception as e:
+                    logger.error(f"Error in streaming chunk: {e}", exc_info=True)
+                    yield "data: Sorry, I encountered an error processing your request.\n\n"
+            
+            # Return the generator itself, not the coroutine
+            return generate()
+            
         except Exception as e:
-            print(f"Error in streaming: {e}")
-            yield "data: Sorry, I encountered an error processing your request.\n\n"
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                # Exponential backoff
+                wait_time = 2 ** attempt
+                logger.info(f"Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"All {max_retries} attempts failed")
+                # Return a fallback response generator
+                async def fallback_response():
+                    yield "I'm experiencing technical difficulties right now. Please try again in a moment."
+                return fallback_response()
+
+async def patient_response_with_context(message, context_messages, max_retries=3):
+    """Patient response with conversation context and retry logic"""
+    # Build messages array with context
+    messages = [{"role": "system", "content": prompt}]
     
-    # Return the generator itself, not the coroutine
-    return generate()
+    # Add context messages (last 2 messages + any long-term context)
+    for ctx_msg in context_messages:
+        messages.append({
+            "role": ctx_msg["role"],
+            "content": ctx_msg["content"]
+        })
+    
+    # Add current message
+    messages.append({"role": "user", "content": message})
+    
+    # Retry logic for API failures
+    for attempt in range(max_retries):
+        try:
+            # Create a streaming chat completion
+            stream = client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                stream=True,
+                timeout=30.0,  # Add timeout
+                max_tokens=1000  # Limit response length
+            )
+            
+            # Create an async generator
+            async def generate():
+                try:
+                    for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content is not None:
+                            content = chunk.choices[0].delta.content
+                            # Ensure we're yielding string data
+                            if content:
+                                yield content
+                except Exception as e:
+                    logger.error(f"Error in streaming chunk: {e}", exc_info=True)
+                    yield "Sorry, I encountered an error processing your request."
+            
+            return generate()
+            
+        except Exception as e:
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                # Exponential backoff
+                wait_time = 2 ** attempt
+                logger.info(f"Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"All {max_retries} attempts failed")
+                # Return a fallback response generator
+                async def fallback_response():
+                    yield "I'm experiencing technical difficulties right now. Please try again in a moment. If the problem persists, please contact support."
+                return fallback_response()

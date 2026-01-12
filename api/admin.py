@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -10,11 +10,29 @@ from sqlalchemy.orm import Session
 from database.database import get_db
 from database.models import User, ChatSession
 from database.models import Article  # Import Article from the models module
+from api.auth import get_current_user
+from config import settings
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter()
 
 @router.get("/users", response_model=Dict[str, Any])
-async def get_users(db: Session = Depends(get_db)) -> JSONResponse:
+@limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
+async def get_users(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+) -> JSONResponse:
+    # Check if user is admin
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
     try:
         total_users = db.query(User).count()
         active_patients = db.query(User).filter(User.role == "patient").count()
@@ -58,7 +76,18 @@ class ArticleResponse(ArticleBase):
 
 # Article API
 @router.get("/articles", response_model=List[Dict[str, Any]])
-async def get_articles(db: Session = Depends(get_db)):
+@limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
+async def get_articles(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Check if user is admin
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
     try:
         articles = db.query(Article).filter(Article.status == "published").all()
         return [
@@ -79,7 +108,19 @@ async def get_articles(db: Session = Depends(get_db)):
         )
 
 @router.post("/articles", response_model=Dict[str, Any], status_code=201)
-async def create_article(article_data: ArticleBase, db: Session = Depends(get_db)):
+@limiter.limit(f"{settings.RATE_LIMIT}/minute")
+async def create_article(
+    request: Request,
+    article_data: ArticleBase, 
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Check if user is admin
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
     try:
         print(f"Received article data: {article_data}")
         

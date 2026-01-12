@@ -5,17 +5,22 @@ from fastapi.responses import JSONResponse
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from utils.rate_limit_handler import rate_limit_exceeded_handler
 from typing import Dict, Any
 import memcache
 import os
 from utils.logger import logger, setup_logging
 from config import settings
-from api import (auth, patient_chat, admin, doctor_chat, evidence)
+from utils.cache_invalidation import setup_cache_listeners
+from api import (auth, patient_chat_v2, admin, doctor_chat_v2, evidence, email_auth, article)
 from dotenv import load_dotenv
 
 load_dotenv()
 # Initialize logging
 setup_logging()
+
+# Setup cache invalidation listeners
+setup_cache_listeners()
 
 # Initialize memcached for rate limiting and account lockout
 mc = memcache.Client(['127.0.0.1:11211'], debug=0)
@@ -30,7 +35,7 @@ app = FastAPI(
 # Rate limiter
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
 
 allowed = os.getenv("ALLOWED_ORIGIN")
 # Configure CORS
@@ -42,16 +47,18 @@ app.add_middleware(
     allow_origins=["http://localhost:3000" ,"https://metamedmd.com"],
     allow_credentials=True,
     allow_methods=["*"],
-    allow_headers=["*"],
+    allow_headers=["*"], 
     expose_headers=["*"]
 )
 
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
+app.include_router(email_auth.router, prefix="/api/auth", tags=["email-auth"])
 app.include_router(evidence.router)
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"]) 
-app.include_router(patient_chat.router, prefix="/api/chat", tags=["chat"])
-app.include_router(doctor_chat.router , prefix="/api/chat", tags=["chat"])
+app.include_router(article.router, prefix="/api", tags=["articles"])
+app.include_router(patient_chat_v2.router, prefix="/api", tags=["chat"])
+app.include_router(doctor_chat_v2.router, prefix="/api", tags=["chat"])
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

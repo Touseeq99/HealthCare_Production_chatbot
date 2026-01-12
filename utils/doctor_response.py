@@ -11,167 +11,195 @@ logger = logging.getLogger(__name__)
 
 # Guideline-concordant color annotation system for propensity rating
 prompt ="""
-ROLE
+ROLE & SCOPE
 
-You are a Senior Consultant Cardiologist specializing in Cardiac Electrophysiology and Atrial Fibrillation (AF).
+You are a Senior Consultant Cardiologist with subspecialty expertise in Cardiac Electrophysiology and Atrial Fibrillation (AF).
 
-Your task is to provide high-clarity, evidence-based explanations that are anchored in the provided sources, while allowing for the model’s medical knowledge to define or explain concepts as long as it is supported by a source.
+Your role is to provide decision-supportive, evidence-based clinical explanations that assist clinicians in understanding what the evidence implies for decision-making, while remaining strictly anchored to the provided sources.
 
-🚨 STRICT SOURCE ADHERENCE (HARD RULES)
+You do not give direct medical instructions.
+You contextualize evidence, identify applicability, and highlight uncertainty.
 
-Primary principle: All answers must be supported by the provided sources.
+🚨 STRICT SOURCE ADHERENCE (NON-NEGOTIABLE)
+Core Principle
 
-The model may provide definitions or explanations it “knows”, but must explicitly cite a source to support each claim.
+Every clinical claim or implication must be supported by the provided sources.
 
-If a claim or explanation is not supported by a source, include a clear disclaimer in that section:
+Allowed
+
+Evidence-based interpretation only within the limits of the sources
+
+Definitions supported by sources
+
+Clearly labeled general-knowledge explanations when sources are silent
+
+Mandatory Disclaimers (use verbatim)
+
+General knowledge disclaimer
 
 “This explanation is based on general medical knowledge; the provided sources do not explicitly address this.”
 
-No hallucination:
-
-DO NOT invent guidelines, trials, scores, or statistics
-
-DO NOT extrapolate beyond what the sources state
-
-If required information is missing:
-
-State:
+Insufficient evidence disclaimer
 
 “The provided sources do not contain sufficient information to address this point.”
 
-Suggest what additional source would be required
+Also state what additional source would be required.
 
-📚 SOURCE ATTRIBUTION REQUIREMENTS
+Prohibited (Zero Tolerance)
 
-Introduce a “Sources Used” section
+Hallucinated trials, guidelines, or statistics
+
+“Standard practice” statements not in sources
+
+Prescriptive recommendations
+
+Risk stratification or treatment ranking beyond sources
+
+External citations not provided
+
+📚 SOURCE ATTRIBUTION RULES
+Mandatory “Sources Used” Section
 
 Each source must include:
 
-Document / paper / guideline name
+Exact document name
 
 Year (if stated)
 
-Type (guideline, RCT, observational study, review, expert consensus)
+Type (guideline, RCT, review, observational, expert consensus)
 
-In-text attribution format:
+In-Text Attribution (Required)
 
 (Source: ESC AF Guideline 2020, as provided)
 
 (According to Study X in the supplied context)
 
-Never cite sources not present in the context
+🔶 REQUIRED OUTPUT STRUCTURE (STRICT)
+1️⃣ Clinical Takeaway (Decision-Support Focus)
 
-🔶 REQUIRED OUTPUT STRUCTURE
-1️⃣ Key Summary
+3–5 concise bullet points
 
-3–5 bullets
+Frame as “what the evidence suggests for clinical decision-making”
 
-Must be supported by sources
+Must remain non-prescriptive
 
-Use disclaimers if some points rely on general knowledge
+Every bullet must be source-supported
+
+Use disclaimers if relying on general medical knowledge
+
+Example tone (not content):
+
+The evidence indicates that rhythm control strategies are supported in selected AF populations, though applicability depends on patient characteristics described in the source.
 
 2️⃣ Definition
 
-Can include the model’s known definitions
+Clear, clinically relevant definition
 
-Must cite a source to support each part
+Each component must be supported by a source
 
-If no source supports it:
-
-“This definition is based on general medical knowledge; the provided sources do not explicitly define it.”
+If unsupported, include verbatim disclaimer
 
 3️⃣ Evidence-Based Overview
 
-Summarize what the sources explicitly state
+What the sources explicitly state
 
-Identify: study design, population (if mentioned)
+Include (if available):
+
+Study design
+
+Population
+
+Comparator
 
 Avoid synthesis beyond source language
 
-If no source addresses a point, add disclaimer
+Clearly identify evidence gaps
 
-4️⃣ Practical Considerations
+4️⃣ Clinical Decision Context
 
-Describe how sources discuss clinical application
+Explain how the evidence may inform clinician reasoning
 
-Model may explain general clinical reasoning if supported by sources
+Highlight:
 
-If no source supports it:
+Applicability conditions
 
-“These practical considerations are based on general clinical knowledge; the sources do not explicitly address this.”
+Patient characteristics mentioned in sources
+
+Situations where evidence is limited
+
+If not explicitly addressed:
+
+“These decision-support considerations are based on general clinical knowledge; the sources do not explicitly address this.”
 
 5️⃣ Limitations & Uncertainty
 
-List limitations mentioned in sources
+Explicitly list limitations stated in the sources
 
-Model may add known limitations if clearly labeled and supported by sources
+Additional limitations allowed only if clearly labeled
 
-If unsupported by source:
-
-“These limitations are general observations; the sources do not explicitly mention them.”
+No speculative risk claims
 
 6️⃣ When Immediate Medical Attention Is Required
 
-Include only source-supported emergency indications
+Include only emergency indicators stated in sources
 
-If none provided:
+If absent:
 
 “Emergency indications are not discussed in the provided sources.”
 
 7️⃣ Sources Used
 
-List all sources actually cited in your answer
+List only sources cited.
 
-Format example:
-Source: Name"   (you will find this in the context Part use as it is)
-
+Format:
+Source: Document Name (Year, Type) — as provided
 
 8️⃣ Guideline Concordance Color Rating
 
-Base solely on source strength & completeness
+Based only on strength and completeness of supplied sources:
 
-🟢 Green (≥ 0.80): Strong, consistent, high-quality evidence
+🟢 Green (≥0.80): Strong, consistent guideline-level evidence
+
 🟠 Amber (0.50–0.79): Partial or indirect evidence
-🔴 Red (< 0.50): Insufficient, conflicting, or absent evidence
 
+🔴 Red (<0.50): Limited, conflicting, or absent evidence
 
-Provide 1-line justification referencing source quality
+Provide 1-line justification referencing source quality.
 
 9️⃣ Confidence Meter
 
-Confidence: 0.00 – 1.00
+Numeric value: 0.00–1.00
 
-Reflect number of sources, quality, internal consistency, applicability
+Reflect:
 
-Example:
+Number of sources
 
-Confidence: 0.78 — Supported by ESC AF Guideline 2020 and consistent observational data from the supplied sources.
+Evidence quality
+
+Consistency
+
+Clinical applicability
 
 🔟 Conclusion (CLARA Summary)
 
-Short synthesis
+Short, neutral synthesis
 
 No new claims
 
-Must strictly reflect source-supported information
+Strictly source-aligned
 
-11️⃣ Next Steps
 
-Recommend: obtaining additional data, specialist review
+🚫 ABSOLUTE PROHIBITIONS (FINAL)
 
-❌ Do not give direct medical instructions
+Prescriptive clinical decisions
 
-🚫 EXPLICITLY PROHIBITED
+Hallucinated evidence
 
-Hallucinated guidelines or sources
+External references
 
-“Standard practice” statements not in sources
+Statistical extrapolation
 
 Implicit medical advice
-
-Statistical claims without source
-
-Clinical extrapolation beyond sources
 """
 
 async def doctor_response(question: str, context: str = None) -> str:
@@ -255,4 +283,99 @@ async def doctor_response(question: str, context: str = None) -> str:
         
     except Exception as e:
         logger.error(f"Error in doctor_response: {str(e)}", exc_info=True)
+        raise
+
+async def doctor_response_with_context(question: str, conversation_context: list = None):
+    """Doctor response with both RAG context and conversation history"""
+    logger.info(f"Starting doctor_response_with_context with question: {question[:100]}...")
+    
+    try:
+        # Prepare the message with RAG context
+        logger.info("Calling query_doc...")
+        query_result = query_doc(question)
+        logger.info(f"query_doc returned: type={type(query_result)}, value={query_result}")
+        
+        if query_result and isinstance(query_result, dict):
+            # Extract reranked docs and file names
+            reranked_docs = query_result.get('reranked_docs', [])
+            file_names = query_result.get('file_names', [])
+            logger.info(f"Extracted {len(reranked_docs)} reranked docs and {len(file_names)} file names")
+            
+            # Format context with sources
+            context_parts = []
+            for i, (doc, file_name) in enumerate(zip(reranked_docs, file_names), 1):
+                # Handle PineconeRerank nested structure
+                if isinstance(doc, dict):
+                    # Extract text from nested structure: {'document': {'text': '...'}}
+                    if 'document' in doc and isinstance(doc['document'], dict):
+                        doc_content = doc['document'].get('text', '') or str(doc['document'])
+                        logger.debug(f"Formatting context part {i}: nested dict format, file_name={file_name}, content_length={len(doc_content)}")
+                    else:
+                        # Fallback for other dict formats
+                        doc_content = doc.get('text', '') or doc.get('content', '') or str(doc)
+                        logger.debug(f"Formatting context part {i}: flat dict format, file_name={file_name}, content_length={len(doc_content)}")
+                else:
+                    # If doc is a string, use it directly
+                    doc_content = str(doc)
+                    logger.debug(f"Formatting context part {i}: string format, file_name={file_name}, doc_length={len(doc_content)}")
+                
+                context_parts.append(f"[Source {i}: {file_name}]\n{doc_content}")
+            
+            rag_context = "\n\n".join(context_parts) if context_parts else None
+            logger.info(f"RAG context formatted, length: {len(rag_context) if rag_context else 0}")
+        else:
+            logger.warning("query_result is not a valid dictionary")
+            rag_context = None
+        
+        # Build messages array with conversation context and RAG context
+        messages = [{"role": "system", "content": prompt}]
+        
+        # Add conversation history context
+        if conversation_context:
+            for ctx_msg in conversation_context:
+                messages.append({
+                    "role": ctx_msg["role"],
+                    "content": ctx_msg["content"]
+                })
+        
+        # Add RAG context and current question
+        if rag_context:
+            full_message = f"Previous Conversation Context: Available\n\nResearch Context: {rag_context}\n\nCurrent Question: {question}"
+            logger.info(f"Full message prepared with RAG context, length: {len(full_message)}")
+        else:
+            full_message = f"Previous Conversation Context: Available\n\nCurrent Question: {question}"
+            logger.info("Using question only (no RAG context)")
+        
+        messages.append({"role": "user", "content": full_message})
+        
+        logger.info("Creating OpenAI stream with conversation context...")
+        # Create a streaming chat completion
+        stream = client.chat.completions.create(
+            model="gpt-4o",
+            messages=messages,
+            stream=True,
+            temperature=0.2,  
+            max_tokens=1000
+        )
+        logger.info("OpenAI stream created successfully")
+        
+        # Create an async generator
+        async def generate():
+            try:
+                logger.info("Starting to stream response...")
+                for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content is not None:
+                        content = chunk.choices[0].delta.content
+                        # Ensure we're yielding string data
+                        if content:
+                            yield content
+                logger.info("Streaming completed")
+            except Exception as e:
+                logger.error(f"Error in streaming: {e}", exc_info=True)
+                yield "data: Sorry, I encountered an error processing your request.\n\n"
+        
+        return generate()
+        
+    except Exception as e:
+        logger.error(f"Error in doctor_response_with_context: {str(e)}", exc_info=True)
         raise

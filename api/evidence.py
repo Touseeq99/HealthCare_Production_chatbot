@@ -1,17 +1,29 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import func
 from database.database import get_db
-from database.models import ResearchPaper, ResearchPaperScore, ResearchPaperKeyword, ResearchPaperComment
-from utils.evidence_engine import get_evidence_with_details
+from database.models import ResearchPaper, ResearchPaperScore, ResearchPaperKeyword, ResearchPaperComment, User
+from utils.evidence_engine import get_evidence_with_details, get_all_categories, get_all_paper_types, get_files_with_pagination, get_paper_by_id, get_papers_count
+from utils.evidence_cache import evidence_cache
+from utils.auth_dependencies import get_current_user
+from utils.validation import (
+    ValidationMiddleware, SQLInjectionProtection, RateLimitValidation
+)
+from utils.query_optimizer import QueryOptimizer
 from pydantic import BaseModel, Field, validator, ConfigDict
 from typing import List, Optional, Dict, Any, Union
+from config import settings
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 router = APIRouter(
     prefix="/api/evidence",
@@ -71,8 +83,11 @@ class EvidenceFilter(BaseModel):
     limit: int = Field(100, ge=1, le=1000, description="Maximum number of records to return")
 
 @router.post("/search", response_model=List[Dict[str, Any]])
+@limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
 async def search_evidence(
+    request: Request,
     filters: EvidenceFilter,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -124,31 +139,26 @@ async def search_evidence(
         )
 
 @router.get("/categories", response_model=List[str])
+@limiter.limit(f"{settings.RATE_LIMIT * 3}/minute")
 async def get_available_categories(
+    request: Request,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Get a list of all available score categories.
     """
     try:
-        categories = db.query(ResearchPaperScore.category)\
-                      .distinct()\
-                      .all()
+        categories = get_all_categories(db)
+        
         if not categories:
             logger.warning("No categories found in the database")
             return []
             
-        return [str(c[0]) for c in categories if c[0] is not None]
+        return categories
         
-    except SQLAlchemyError as e:
-        error_msg = f"Database error while fetching categories: {str(e)}"
-        logger.error(error_msg)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_msg
-        )
     except Exception as e:
-        error_msg = f"Unexpected error while fetching categories: {str(e)}"
+        error_msg = f"Error while fetching categories: {str(e)}"
         logger.error(error_msg)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -156,32 +166,26 @@ async def get_available_categories(
         )
 
 @router.get("/paper-types", response_model=List[str])
+@limiter.limit(f"{settings.RATE_LIMIT * 3}/minute")
 async def get_available_paper_types(
+    request: Request,
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
     Get a list of all available paper types.
     """
     try:
-        paper_types = db.query(ResearchPaper.paper_type)\
-                       .distinct()\
-                       .all()
-                       
+        paper_types = get_all_paper_types(db)
+        
         if not paper_types:
             logger.warning("No paper types found in the database")
             return []
             
-        return [str(t[0]) for t in paper_types if t[0] is not None]
+        return paper_types
         
-    except SQLAlchemyError as e:
-        error_msg = f"Database error while fetching paper types: {str(e)}"
-        logger.error(error_msg)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_msg
-        )
     except Exception as e:
-        error_msg = f"Unexpected error while fetching paper types: {str(e)}"
+        error_msg = f"Error while fetching paper types: {str(e)}"
         logger.error(error_msg)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -218,8 +222,11 @@ class PaginatedFilesResponse(BaseModel):
     total_pages: int
 
 @router.get("/files", response_model=PaginatedFilesResponse)
+@limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
 async def get_all_files(
+    request: Request,
     pagination: PaginationParams = Depends(),
+    current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """
@@ -228,68 +235,104 @@ async def get_all_files(
     Returns a paginated list of all research papers in the database.
     """
     try:
-        # Calculate pagination
-        offset = (pagination.page - 1) * pagination.page_size
+        result = get_files_with_pagination(db, pagination.page, pagination.page_size)
         
-        # Get total count
-        total = db.query(func.count(ResearchPaper.id)).scalar()
-        
-        # Calculate total pages
-        total_pages = (total + pagination.page_size - 1) // pagination.page_size
-        
-        # Get paginated results with relationships
-        files = (db.query(ResearchPaper)
-                 .options(
-                     joinedload(ResearchPaper.keywords),
-                     joinedload(ResearchPaper.comments)
-                 )
-                 .order_by(ResearchPaper.created_at.desc())
-                 .offset(offset)
-                 .limit(pagination.page_size)
-                 .all())
-        
-        # Format the response with keywords and comments
+        # Convert to response model
         response_items = []
-        for file in files:
-            # Convert file to dict first
-            file_dict = {
-                'id': file.id,
-                'file_name': file.file_name,
-                'paper_type': file.paper_type,
-                'total_score': file.total_score,
-                'confidence': file.confidence,
-                'created_at': file.created_at,
-                'updated_at': file.updated_at,
-                'keywords': [kw.keyword for kw in file.keywords] if file.keywords else [],
-                'comments': [
-                    {
-                        'id': c.id,
-                        'comment': c.comment,
-                        'is_penalty': c.is_penalty
-                    } for c in file.comments
-                ] if file.comments else []
-            }
-            response_items.append(FileResponse(**file_dict))
+        for item in result["items"]:
+            response_items.append(FileResponse(**item))
         
-        return {
-            "items": response_items,
-            "total": total,
-            "page": pagination.page,
-            "page_size": pagination.page_size,
-            "total_pages": total_pages
-        }
-        
-    except SQLAlchemyError as e:
-        error_msg = f"Database error while fetching files: {str(e)}"
-        logger.error(error_msg)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_msg
+        return PaginatedFilesResponse(
+            items=response_items,
+            total=result["total"],
+            page=result["page"],
+            page_size=result["page_size"],
+            total_pages=result["total_pages"]
         )
+        
     except Exception as e:
-        error_msg = f"Unexpected error while fetching files: {str(e)}"
+        error_msg = f"Error while fetching files: {str(e)}"
         logger.error(error_msg)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="An unexpected error occurred while fetching files" 
+        )
+
+@router.get("/cache/stats")
+@limiter.limit(f"{settings.RATE_LIMIT * 3}/minute")
+async def get_cache_stats(
+    request: Request,
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Get cache statistics (admin only).
+    """
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    
+    try:
+        stats = evidence_cache.get_cache_stats()
+        return stats
+        
+    except Exception as e:
+        error_msg = f"Error getting cache stats: {str(e)}"
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to get cache statistics"
+        )
+
+@router.post("/cache/invalidate")
+@limiter.limit(f"{settings.RATE_LIMIT}/minute")
+async def invalidate_cache(
+    request: Request,
+    cache_type: Optional[str] = Query(None, description="Type of cache to invalidate (search, categories, paper_types, files, paper, count)"),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Invalidate cache (admin only).
+    
+    Args:
+        cache_type: Specific cache type to invalidate, or None to invalidate all
+    """
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    
+    try:
+        if cache_type:
+            if cache_type not in evidence_cache.KEY_PREFIXES:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid cache type. Valid types: {list(evidence_cache.KEY_PREFIXES.keys())}"
+                )
+            
+            success = evidence_cache.invalidate(cache_type)
+            message = f"Cache invalidated for type: {cache_type}"
+        else:
+            success = evidence_cache.invalidate_all()
+            message = "All evidence cache invalidated"
+        
+        logger.info(f"Cache invalidation requested by {current_user.email}: {message}")
+        
+        return {
+            "success": success,
+            "message": message,
+            "invalidated_by": current_user.email,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = f"Error invalidating cache: {str(e)}"
+        logger.error(error_msg)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to invalidate cache"
         )
