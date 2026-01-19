@@ -17,6 +17,7 @@ from utils.validation import (
 logger = logging.getLogger(__name__)
 from slowapi.util import get_remote_address
 from typing import Optional
+import time
 
 # Legacy models for backward compatibility
 class Message(BaseModel):
@@ -79,6 +80,9 @@ async def stream_response(
             long_term_limit=3
         )
         
+        # Start timing the total process
+        start_time = time.time()
+        
         # Import here to avoid circular imports
         from utils.doctor_response import doctor_response_with_context
         
@@ -106,6 +110,10 @@ async def stream_response(
                 logger.error(f"Error in streaming: {e}", exc_info=True)
                 yield "data: Sorry, I encountered an error processing your request.\n\n"
             finally:
+                # Calculate and log total processing time
+                total_duration = time.time() - start_time
+                logger.info(f"Total processing time for doctor RAG answer: {total_duration:.4f} seconds")
+                
                 # Save assistant response to memory
                 logger.info(f"Finally block executing. Assistant response length: {len(assistant_response)}")
                 if assistant_response.strip():

@@ -1,13 +1,49 @@
+import time
+import json
+import os
+from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
 import asyncio
-from Rag_Service.retrieval import query_doc
+from Rag_Service.retrieval import query_doc, aquery_doc
 import logging
 load_dotenv()
 
 client = OpenAI()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+def log_rag_interaction(question: str, context: str):
+    """Log the question and retrieved context to a JSON file"""
+    try:
+        log_entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "question": question,
+            "context": context
+        }
+        
+        log_file = "testinglog.json"
+        
+        # inconsistent implementation suitable for dev/testing
+        if os.path.exists(log_file):
+            try:
+                with open(log_file, 'r', encoding='utf-8') as f:
+                    logs = json.load(f)
+                    if not isinstance(logs, list):
+                        logs = []
+            except Exception:
+                logs = []
+        else:
+            logs = []
+            
+        logs.append(log_entry)
+        
+        with open(log_file, 'w', encoding='utf-8') as f:
+            json.dump(logs, f, indent=2, ensure_ascii=False)
+            
+        logger.info(f"Logged RAG interaction to {log_file}")
+    except Exception as e:
+        logger.error(f"Failed to log RAG interaction: {e}")
 
 # Guideline-concordant color annotation system for propensity rating
 prompt ="""
@@ -17,8 +53,21 @@ You are a Senior Consultant Cardiologist with subspecialty expertise in Cardiac 
 
 Your role is to provide decision-supportive, evidence-based clinical explanations that assist clinicians in understanding what the evidence implies for decision-making, while remaining strictly anchored to the provided sources.
 
-You do not give direct medical instructions.
-You contextualize evidence, identify applicability, and highlight uncertainty.
+You must integrate insights from three distinct perspectives provided in the context:
+1. Research Evidence (Guidelines, RCTs)
+2. Expert Opinion (Clinical Experience, Expert Consensus)
+3. Patient Opinion (Patient Values, Lived Experience)
+
+🚨 STRICT CONTEXT PARTITIONING
+You will receive context data separated into three named blocks:
+- === RESEARCH EVIDENCE ===
+- === EXPERT OPINION ===
+- === PATIENT OPINION ===
+
+When generating the response, you must ONLY use information from the "RESEARCH EVIDENCE" block to write the "Research Evidence" section.
+You must ONLY use information from the "EXPERT OPINION" block to write the "Expert Opinion" section.
+You must ONLY use information from the "PATIENT OPINION" block to write the "Patient Perspectives" section.
+DO NOT Mix sources across these sections. If a block says "No information found", state "No specific information provided in sources".
 
 🚨 STRICT SOURCE ADHERENCE (NON-NEGOTIABLE)
 Core Principle
@@ -75,49 +124,33 @@ In-Text Attribution (Required)
 (According to Study X in the supplied context)
 
 🔶 REQUIRED OUTPUT STRUCTURE (STRICT)
-1️⃣ Clinical Takeaway (Decision-Support Focus)
+1️⃣ Clinical Takeaway (Synthesis)
 
 3–5 concise bullet points
 
+Synthesize key insights from Research, Expert, and Patient perspectives.
+
 Frame as “what the evidence suggests for clinical decision-making”
 
-Must remain non-prescriptive
+2️⃣ Research Evidence (Standard Guidelines)
 
-Every bullet must be source-supported
+Summary of relevant guidelines and trials ONLY from the "RESEARCH EVIDENCE" context block.
 
-Use disclaimers if relying on general medical knowledge
+3️⃣ Expert Opinion (Clinical Nuance)
 
-Example tone (not content):
+Summary of expert insights ONLY from the "EXPERT OPINION" context block.
 
-The evidence indicates that rhythm control strategies are supported in selected AF populations, though applicability depends on patient characteristics described in the source.
+Highlight practical considerations or advanced management strategies.
 
-2️⃣ Definition
+4️⃣ Patient Perspectives (Lived Experience)
 
-Clear, clinically relevant definition
+Summary of patient values, concerns, and experiences ONLY from the "PATIENT OPINION" context block.
 
-Each component must be supported by a source
+Highlight compliance issues, quality of life, or patient preferences.
 
-If unsupported, include verbatim disclaimer
+5️⃣ Clinical Decision Context
 
-3️⃣ Evidence-Based Overview
-
-What the sources explicitly state
-
-Include (if available):
-
-Study design
-
-Population
-
-Comparator
-
-Avoid synthesis beyond source language
-
-Clearly identify evidence gaps
-
-4️⃣ Clinical Decision Context
-
-Explain how the evidence may inform clinician reasoning
+Explain how to integrate these three perspectives for decision-making.
 
 Highlight:
 
@@ -125,13 +158,9 @@ Applicability conditions
 
 Patient characteristics mentioned in sources
 
-Situations where evidence is limited
+Situations where perspectives might conflict or align
 
-If not explicitly addressed:
-
-“These decision-support considerations are based on general clinical knowledge; the sources do not explicitly address this.”
-
-5️⃣ Limitations & Uncertainty
+6️⃣ Limitations & Uncertainty
 
 Explicitly list limitations stated in the sources
 
@@ -139,7 +168,7 @@ Additional limitations allowed only if clearly labeled
 
 No speculative risk claims
 
-6️⃣ When Immediate Medical Attention Is Required
+7️⃣ When Immediate Medical Attention Is Required
 
 Include only emergency indicators stated in sources
 
@@ -147,14 +176,14 @@ If absent:
 
 “Emergency indications are not discussed in the provided sources.”
 
-7️⃣ Sources Used
+8️⃣ Sources Used
 
-List only sources cited.
+List only sources cited, categorized by:
+- Research
+- Expert Opinion
+- Patient Opinion
 
-Format:
-Source: Document Name (Year, Type) — as provided
-
-8️⃣ Guideline Concordance Color Rating
+9️⃣ Guideline Concordance Color Rating
 
 Based only on strength and completeness of supplied sources:
 
@@ -166,7 +195,7 @@ Based only on strength and completeness of supplied sources:
 
 Provide 1-line justification referencing source quality.
 
-9️⃣ Confidence Meter
+🔟 Confidence Meter
 
 Numeric value: 0.00–1.00
 
@@ -202,53 +231,83 @@ Statistical extrapolation
 Implicit medical advice
 """
 
+def format_context_section(header: str, query_result: dict) -> str:
+    """Helper to format a specific context section"""
+    if not query_result or not isinstance(query_result, dict):
+        return f"=== {header} ===\nNo information found."
+    
+    reranked_docs = query_result.get('reranked_docs', [])
+    file_names = query_result.get('file_names', [])
+    
+    if not reranked_docs:
+        return f"=== {header} ===\nNo relevant documents found."
+        
+    context_parts = []
+    for i, (doc, file_name) in enumerate(zip(reranked_docs, file_names), 1):
+        # Handle PineconeRerank nested structure
+        if isinstance(doc, dict):
+            if 'document' in doc and isinstance(doc['document'], dict):
+                doc_content = doc['document'].get('text', '') or str(doc['document'])
+            else:
+                doc_content = doc.get('text', '') or doc.get('content', '') or str(doc)
+        else:
+            doc_content = str(doc)
+        
+        # Add clear source attribution within the context block
+        context_parts.append(f"--- Document {i} ({file_name}) ---\n{doc_content}")
+    
+    joined_docs = "\n\n".join(context_parts)
+    return f"=== {header} ===\n{joined_docs}\n=== END {header} ==="
+
 async def doctor_response(question: str, context: str = None) -> str:
     logger.info(f"Starting doctor_response with question: {question[:100]}...")
     
     try:
         # Prepare the message with context if provided
-        logger.info("Calling query_doc...")
-        query_result = query_doc(question)
-        logger.info(f"query_doc returned: type={type(query_result)}, value={query_result}")
+        logger.info("Calling aquery_doc for 3 indices...")
+        rag_start_time = time.time()
         
-        if query_result and isinstance(query_result, dict):
-            # Extract reranked docs and file names
-            reranked_docs = query_result.get('reranked_docs', [])
-            file_names = query_result.get('file_names', [])
-            logger.info(f"Extracted {len(reranked_docs)} reranked docs and {len(file_names)} file names")
-            
-            # Format context with sources
-            context_parts = []
-            for i, (doc, file_name) in enumerate(zip(reranked_docs, file_names), 1):
-                # Handle PineconeRerank nested structure
-                if isinstance(doc, dict):
-                    # Extract text from nested structure: {'document': {'text': '...'}}
-                    if 'document' in doc and isinstance(doc['document'], dict):
-                        doc_content = doc['document'].get('text', '') or str(doc['document'])
-                        logger.debug(f"Formatting context part {i}: nested dict format, file_name={file_name}, content_length={len(doc_content)}")
-                    else:
-                        # Fallback for other dict formats
-                        doc_content = doc.get('text', '') or doc.get('content', '') or str(doc)
-                        logger.debug(f"Formatting context part {i}: flat dict format, file_name={file_name}, content_length={len(doc_content)}")
-                else:
-                    # If doc is a string, use it directly
-                    doc_content = str(doc)
-                    logger.debug(f"Formatting context part {i}: string format, file_name={file_name}, doc_length={len(doc_content)}")
-                
-                context_parts.append(f"[Source {i}: {file_name}]\n{doc_content}")
-            
-            context_text = "\n\n".join(context_parts) if context_parts else None
-            logger.info(f"Context formatted, length: {len(context_text) if context_text else 0}")
-        else:
-            logger.warning("query_result is not a valid dictionary")
-            context_text = None
+        # Parallel retrieval
+        results = await asyncio.gather(
+            aquery_doc(question, 'research'),
+            aquery_doc(question, 'expert'),
+            aquery_doc(question, 'patient'),
+            return_exceptions=True
+        )
         
-        if context_text:
-            full_message = f"Context: {context_text}\n\nQuestion: {question}"
-            logger.info(f"Full message prepared, length: {len(full_message)}")
+        research_result, expert_result, patient_result = results
+        
+        rag_duration = time.time() - rag_start_time
+        logger.info(f"RAG Retrieval time (Parallel): {rag_duration:.4f} seconds")
+        
+        # Handle exceptions if any retrieval failed
+        full_context_parts = []
+        
+        if isinstance(research_result, Exception):
+            logger.error(f"Research retrieval failed: {research_result}")
+            full_context_parts.append("=== RESEARCH EVIDENCE ===\nRetrieval failed.")
         else:
-            full_message = question
-            logger.info("Using question only (no context)")
+            full_context_parts.append(format_context_section("RESEARCH EVIDENCE", research_result))
+            
+        if isinstance(expert_result, Exception):
+            logger.error(f"Expert retrieval failed: {expert_result}")
+            full_context_parts.append("=== EXPERT OPINION ===\nRetrieval failed.")
+        else:
+            full_context_parts.append(format_context_section("EXPERT OPINION", expert_result))
+            
+        if isinstance(patient_result, Exception):
+            logger.error(f"Patient retrieval failed: {patient_result}")
+            full_context_parts.append("=== PATIENT OPINION ===\nRetrieval failed.")
+        else:
+            full_context_parts.append(format_context_section("PATIENT OPINION", patient_result))
+            
+        context_text = "\n\n".join(full_context_parts)
+        logger.info(f"Context formatted, length: {len(context_text)}")
+        
+        # Log interaction
+        log_rag_interaction(question, context_text)
+        
+        full_message = f"Context:\n{context_text}\n\nQuestion: {question}"
         
         logger.info("Creating OpenAI stream...")
         # Create a streaming chat completion
@@ -260,7 +319,7 @@ async def doctor_response(question: str, context: str = None) -> str:
             ],
             stream=True,
             temperature=0.2,  
-            max_tokens=1000
+            max_tokens=1500
         )
         logger.info("OpenAI stream created successfully")
         
@@ -271,7 +330,6 @@ async def doctor_response(question: str, context: str = None) -> str:
                 for chunk in stream:
                     if chunk.choices and chunk.choices[0].delta.content is not None:
                         content = chunk.choices[0].delta.content
-                        # Ensure we're yielding string data
                         if content:
                             yield content
                 logger.info("Streaming completed")
@@ -291,41 +349,48 @@ async def doctor_response_with_context(question: str, conversation_context: list
     
     try:
         # Prepare the message with RAG context
-        logger.info("Calling query_doc...")
-        query_result = query_doc(question)
-        logger.info(f"query_doc returned: type={type(query_result)}, value={query_result}")
+        logger.info("Calling aquery_doc for 3 indices...")
+        rag_start_time = time.time()
         
-        if query_result and isinstance(query_result, dict):
-            # Extract reranked docs and file names
-            reranked_docs = query_result.get('reranked_docs', [])
-            file_names = query_result.get('file_names', [])
-            logger.info(f"Extracted {len(reranked_docs)} reranked docs and {len(file_names)} file names")
-            
-            # Format context with sources
-            context_parts = []
-            for i, (doc, file_name) in enumerate(zip(reranked_docs, file_names), 1):
-                # Handle PineconeRerank nested structure
-                if isinstance(doc, dict):
-                    # Extract text from nested structure: {'document': {'text': '...'}}
-                    if 'document' in doc and isinstance(doc['document'], dict):
-                        doc_content = doc['document'].get('text', '') or str(doc['document'])
-                        logger.debug(f"Formatting context part {i}: nested dict format, file_name={file_name}, content_length={len(doc_content)}")
-                    else:
-                        # Fallback for other dict formats
-                        doc_content = doc.get('text', '') or doc.get('content', '') or str(doc)
-                        logger.debug(f"Formatting context part {i}: flat dict format, file_name={file_name}, content_length={len(doc_content)}")
-                else:
-                    # If doc is a string, use it directly
-                    doc_content = str(doc)
-                    logger.debug(f"Formatting context part {i}: string format, file_name={file_name}, doc_length={len(doc_content)}")
-                
-                context_parts.append(f"[Source {i}: {file_name}]\n{doc_content}")
-            
-            rag_context = "\n\n".join(context_parts) if context_parts else None
-            logger.info(f"RAG context formatted, length: {len(rag_context) if rag_context else 0}")
+        # Parallel retrieval
+        results = await asyncio.gather(
+            aquery_doc(question, 'research'),
+            aquery_doc(question, 'expert'),
+            aquery_doc(question, 'patient'),
+            return_exceptions=True
+        )
+        
+        research_result, expert_result, patient_result = results
+        
+        rag_duration = time.time() - rag_start_time
+        logger.info(f"RAG Retrieval time (Parallel): {rag_duration:.4f} seconds")
+        
+        # Format context parts
+        full_context_parts = []
+        
+        if isinstance(research_result, Exception):
+            logger.error(f"Research retrieval failed: {research_result}")
+            full_context_parts.append("=== RESEARCH EVIDENCE ===\nRetrieval failed.")
         else:
-            logger.warning("query_result is not a valid dictionary")
-            rag_context = None
+            full_context_parts.append(format_context_section("RESEARCH EVIDENCE", research_result))
+            
+        if isinstance(expert_result, Exception):
+            logger.error(f"Expert retrieval failed: {expert_result}")
+            full_context_parts.append("=== EXPERT OPINION ===\nRetrieval failed.")
+        else:
+            full_context_parts.append(format_context_section("EXPERT OPINION", expert_result))
+            
+        if isinstance(patient_result, Exception):
+            logger.error(f"Patient retrieval failed: {patient_result}")
+            full_context_parts.append("=== PATIENT OPINION ===\nRetrieval failed.")
+        else:
+            full_context_parts.append(format_context_section("PATIENT OPINION", patient_result))
+            
+        rag_context = "\n\n".join(full_context_parts)
+        logger.info(f"RAG context formatted, length: {len(rag_context)}")
+        
+        # Log interaction
+        log_rag_interaction(question, rag_context)
         
         # Build messages array with conversation context and RAG context
         messages = [{"role": "system", "content": prompt}]
@@ -339,12 +404,8 @@ async def doctor_response_with_context(question: str, conversation_context: list
                 })
         
         # Add RAG context and current question
-        if rag_context:
-            full_message = f"Previous Conversation Context: Available\n\nResearch Context: {rag_context}\n\nCurrent Question: {question}"
-            logger.info(f"Full message prepared with RAG context, length: {len(full_message)}")
-        else:
-            full_message = f"Previous Conversation Context: Available\n\nCurrent Question: {question}"
-            logger.info("Using question only (no RAG context)")
+        full_message = f"Previous Conversation Context: Available\n\nResearch Context:\n{rag_context}\n\nCurrent Question: {question}"
+        logger.info(f"Full message prepared with RAG context, length: {len(full_message)}")
         
         messages.append({"role": "user", "content": full_message})
         
@@ -355,7 +416,7 @@ async def doctor_response_with_context(question: str, conversation_context: list
             messages=messages,
             stream=True,
             temperature=0.2,  
-            max_tokens=1000
+            max_tokens=1500
         )
         logger.info("OpenAI stream created successfully")
         
@@ -366,7 +427,6 @@ async def doctor_response_with_context(question: str, conversation_context: list
                 for chunk in stream:
                     if chunk.choices and chunk.choices[0].delta.content is not None:
                         content = chunk.choices[0].delta.content
-                        # Ensure we're yielding string data
                         if content:
                             yield content
                 logger.info("Streaming completed")

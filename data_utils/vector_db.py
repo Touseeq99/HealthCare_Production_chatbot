@@ -62,6 +62,8 @@ if not pinecone_initialized:
 # Index names
 DOCTOR_INDEX = "doctorfinalindex"
 PATIENT_INDEX = "patientindex"
+EXPERTOPINION_INDEX = "expertopinionindex"
+PATIENTOPINION_INDEX = "patientopinionindex"
 EMBEDDING_DIMENSION = 1536  # Default dimension for OpenAI embeddings
 
 def init_doctor_db() -> None:
@@ -95,4 +97,36 @@ def init_patient_db() -> None:
             )
         )
     return pc.Index(PATIENT_INDEX)
+
+def init_expertopinion_db() -> None:
+    """
+    Initialize the expert opinion vector database index if it doesn't exist.
+    """
+    if EXPERTOPINION_INDEX not in pc.list_indexes().names():
+        pc.create_index(
+            name=EXPERTOPINION_INDEX,
+            dimension=EMBEDDING_DIMENSION,
+            metric="cosine",
+            spec=ServerlessSpec(
+                cloud='aws',
+                region='us-east-1'
+            )
+        )
+    return pc.Index(EXPERTOPINION_INDEX)
+
+def init_patientopinion_db() -> None:
+    """
+    Initialize the patient opinion vector database index if it doesn't exist.
+    """
+    if PATIENTOPINION_INDEX not in pc.list_indexes().names():
+        pc.create_index(
+            name=PATIENTOPINION_INDEX,
+            dimension=EMBEDDING_DIMENSION,
+            metric="cosine",
+            spec=ServerlessSpec(
+                cloud='aws',
+                region='us-east-1'
+            )
+        )
+    return pc.Index(PATIENTOPINION_INDEX)
 
