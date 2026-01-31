@@ -4,12 +4,11 @@ from typing import Dict, Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from supabase import Client
 
-# Import database and models
-from database.database import get_db
-from database.models import User, Article
-from api.auth import get_current_user
+# Import Supabase client
+from utils.supabase_client import get_supabase_client
+from utils.auth_dependencies import get_current_user
 from config import settings
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -23,8 +22,8 @@ router = APIRouter()
 class ArticleBase(BaseModel):
     title: str
     content: str
-    author_id: int = None
-    author: str = None
+    author_id: Optional[str] = None
+    author: Optional[str] = None
     
     class Config:
         extra = 'forbid'  # Reject any extra fields
@@ -51,8 +50,8 @@ class PatientArticleResponse(BaseModel):
 @limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
 async def get_articles_for_patients(
     request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: Any = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
 ):
     """
     Get all published articles for patients and doctors
@@ -65,13 +64,14 @@ async def get_articles_for_patients(
         )
     
     try:
-        articles = db.query(Article).filter(Article.status == "published").all()
+        response = supabase.table('articles').select('*').eq('status', 'published').execute()
+        articles = response.data or []
         return [
             {
-                "id": article.id,
-                "title": article.title,
-                "content": article.content,
-                "created_at": article.created_at
+                "id": article['id'],
+                "title": article['title'],
+                "content": article['content'],
+                "created_at": article['created_at']
             }
             for article in articles
         ]
@@ -86,8 +86,8 @@ async def get_articles_for_patients(
 async def get_article_by_id(
     request: Request,
     article_id: int,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: Any = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
 ):
     """
     Get a specific article by ID for patients and doctors
@@ -100,22 +100,20 @@ async def get_article_by_id(
         )
     
     try:
-        article = db.query(Article).filter(
-            Article.id == article_id,
-            Article.status == "published"
-        ).first()
+        response = supabase.table('articles').select('*').eq('id', article_id).eq('status', 'published').execute()
         
-        if not article:
+        if not response.data:
             raise HTTPException(
                 status_code=404,
                 detail="Article not found"
             )
         
+        article = response.data[0]
         return {
-            "id": article.id,
-            "title": article.title,
-            "content": article.content,
-            "created_at": article.created_at
+            "id": article['id'],
+            "title": article['title'],
+            "content": article['content'],
+            "created_at": article['created_at']
         }
         
     except HTTPException:
@@ -131,8 +129,8 @@ async def get_article_by_id(
 @limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
 async def get_articles_admin(
     request: Request,
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: Any = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
 ):
     """
     Get all articles (admin only) - includes draft articles
@@ -144,15 +142,16 @@ async def get_articles_admin(
             detail="Admin access required"
         )
     try:
-        articles = db.query(Article).all()
+        response = supabase.table('articles').select('*').execute()
+        articles = response.data or []
         return [
             {
-                "id": article.id,
-                "title": article.title,
-                "content": article.content,
-                "author_id": article.author_id,
-                "created_at": article.created_at,
-                "status": article.status
+                "id": article['id'],
+                "title": article['title'],
+                "content": article['content'],
+                "author_id": article['author_id'],
+                "created_at": article['created_at'],
+                "status": article['status']
             }
             for article in articles
         ]
@@ -167,8 +166,8 @@ async def get_articles_admin(
 async def create_article(
     request: Request,
     article_data: ArticleBase, 
-    current_user: User = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    current_user: Any = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
 ):
     """
     Create new article (admin only)
@@ -181,32 +180,35 @@ async def create_article(
         )
     try:
         # Use current admin user as author
-        author_id = current_user.id
+        author_id = str(current_user.id)
         
         # Create article with all required fields
-        article = Article(
-            title=article_data.title,
-            content=article_data.content,
-            author_id=author_id,
-            status="published"
-        )
+        article_insert = {
+            "title": article_data.title,
+            "content": article_data.content,
+            "author_id": author_id,
+            "status": "published",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat()
+        }
         
         try:
-            db.add(article)
-            db.commit()
-            db.refresh(article)
+            response = supabase.table('articles').insert(article_insert).execute()
+            if not response.data:
+                raise Exception("Failed to create article")
+            
+            article = response.data[0]
             
             return {
-                "id": article.id,
-                "title": article.title,
-                "content": article.content,
-                "author": current_user.name,
-                "date": article.created_at,
-                "status": article.status
+                "id": article['id'],
+                "title": article['title'],
+                "content": article['content'],
+                "author": getattr(current_user, 'name', 'Admin'),
+                "date": article['created_at'],
+                "status": article['status']
             }
             
         except Exception as db_error:
-            db.rollback()
             raise HTTPException(
                 status_code=500,
                 detail={

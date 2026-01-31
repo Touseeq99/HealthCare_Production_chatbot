@@ -1,46 +1,37 @@
 from typing import List, Dict, Any, Optional, Tuple
-from sqlalchemy.orm import Session, joinedload, selectinload
-from sqlalchemy import func, and_, or_, desc, asc, text
-from datetime import datetime, timedelta
+from supabase import Client
+from datetime import datetime
 from fastapi import Depends
-from database.models import (
-    ChatSession, ChatMessage, User, ResearchPaper, 
-    ResearchPaperScore, ResearchPaperKeyword, ResearchPaperComment
-)
 from utils.logger import logger
-from utils.query_optimizer import QueryOptimizer, BulkOperations, CacheManager
 from memory.current_memory import current_memory, ChatMessage
 from memory.long_term_memory import LongTermMemory
-from database.database import get_db
+from utils.supabase_client import get_supabase_client
 
 class MemoryManager:
-    """Coordinates between current memory and long-term storage"""
+    """Coordinates between current memory and long-term storage using Supabase Client"""
     
-    def __init__(self, db: Session):
-        self.db = db
-        self.long_term = LongTermMemory(db)
+    def __init__(self, supabase: Client):
+        self.supabase = supabase
+        self.long_term = LongTermMemory(supabase)
         self.current_memory = current_memory
     
-    def create_or_get_session(self, user_id: int, session_id: Optional[int] = None, 
-                             session_type: str = 'patient') -> ChatSession:
-        """Create new session or get existing one (optimized)"""
+    def create_or_get_session(self, user_id: str, session_id: Optional[int] = None, 
+                             session_type: str = 'patient') -> Dict[str, Any]:
+        """Create new session or get existing one using Supabase Client"""
         if session_id:
-            # Use optimized query with specific columns
-            session = self.db.query(ChatSession).filter(
-                ChatSession.id == session_id, 
-                ChatSession.user_id == user_id,
-                ChatSession.status == 'active'
-            ).options(
-                # Load only necessary relationships
-                selectinload(ChatSession.messages)  # Load messages relationship
-            ).first()
-            if session:
-                return session
+            response = self.supabase.table('chat_sessions').select('*')\
+                .eq('id', session_id)\
+                .eq('user_id', str(user_id))\
+                .eq('status', 'active')\
+                .execute()
+            
+            if response.data:
+                return response.data[0]
         
         # Create new session
         return self.long_term.create_session(user_id, session_type)
     
-    def add_message(self, session_id: int, user_id: int, content: str, 
+    def add_message(self, session_id: int, user_id: str, content: str, 
                    role: str, save_to_long_term: bool = True) -> Dict[str, Any]:
         """Add message to both current memory and long-term storage"""
         
@@ -61,11 +52,11 @@ class MemoryManager:
                 message_type='chat'
             )
             return {
-                "message_id": saved_message.id,
+                "message_id": saved_message['id'],
                 "session_id": session_id,
                 "content": content,
                 "role": role,
-                "timestamp": saved_message.created_at.isoformat(),
+                "timestamp": saved_message['created_at'],
                 "saved_to_long_term": True
             }
         
@@ -78,7 +69,7 @@ class MemoryManager:
         }
     
     def get_context_for_llm(self, session_id: int, include_long_term: bool = False, 
-                           long_term_limit: int = 5) -> List[Dict[str, Any]]:
+                            long_term_limit: int = 5) -> List[Dict[str, Any]]:
         """Get context formatted for LLM (last 2 messages + optional long-term)"""
         
         # Get current memory context (last 2 messages)
@@ -107,40 +98,41 @@ class MemoryManager:
         
         return list(reversed(unique_context))
     
-    def get_session(self, session_id: int, user_id: int) -> Optional[ChatSession]:
-        """Get session by ID with ownership verification"""
-        return self.db.query(ChatSession).filter(
-            ChatSession.id == session_id,
-            ChatSession.user_id == user_id,
-            ChatSession.status == 'active'
-        ).first()
+    def get_session(self, session_id: int, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get session by ID with ownership verification using Supabase Client"""
+        response = self.supabase.table('chat_sessions').select('*')\
+            .eq('id', session_id)\
+            .eq('user_id', str(user_id))\
+            .eq('status', 'active')\
+            .execute()
+        return response.data[0] if response.data else None
     
     def get_session_history(self, session_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         """Get full session history from long-term storage"""
         messages = self.long_term.get_session_messages(session_id, limit)
         return [
             {
-                "message_id": msg.id,
-                "content": msg.content,
-                "role": msg.message_type,
-                "timestamp": msg.created_at.isoformat(),
-                "metadata": msg.message_data
+                "message_id": msg['id'],
+                "content": msg['content'],
+                "role": msg['message_type'],
+                "timestamp": msg['created_at'],
+                "metadata": msg.get('message_data', {})
             }
             for msg in messages
         ]
     
-    def get_user_sessions(self, user_id: int) -> List[Dict[str, Any]]:
+    def get_user_sessions(self, user_id: str) -> List[Dict[str, Any]]:
         """Get all active sessions for a user"""
         sessions = self.long_term.get_user_sessions(user_id)
         return [
             {
-                "session_id": session.id,
-                "session_name": session.session_name,
-                "session_type": session.session_type,
-                "message_count": session.message_count,
-                "created_at": session.created_at.isoformat(),
-                "last_message_at": session.last_message_at.isoformat() if session.last_message_at else None,
-                "status": session.status
+                "session_id": session['id'],
+                "session_name": session['session_name'],
+                "session_type": session['session_type'],
+                "message_count": session['message_count'],
+                "created_at": session['created_at'],
+                "last_message_at": session['last_message_at'],
+                "status": session['status']
             }
             for session in sessions
         ]
@@ -149,22 +141,22 @@ class MemoryManager:
         """Clear current memory for a session"""
         self.current_memory.clear_session(session_id)
     
-    def archive_session(self, session_id: int, user_id: int) -> bool:
+    def archive_session(self, session_id: int, user_id: str) -> bool:
         """Archive session and clear current memory"""
         success = self.long_term.archive_session(session_id)
         if success:
             self.clear_current_memory(session_id)
         return success
     
-    def delete_session(self, session_id: int, user_id: int) -> bool:
+    def delete_session(self, session_id: int, user_id: str) -> bool:
         """Delete session and clear current memory"""
         # Verify ownership
-        session = self.db.query(ChatSession).filter(
-            ChatSession.id == session_id,
-            ChatSession.user_id == user_id
-        ).first()
+        response = self.supabase.table('chat_sessions').select('id')\
+            .eq('id', session_id)\
+            .eq('user_id', str(user_id))\
+            .execute()
         
-        if not session:
+        if not response.data:
             return False
         
         success = self.long_term.delete_session(session_id)
@@ -172,15 +164,15 @@ class MemoryManager:
             self.clear_current_memory(session_id)
         return success
     
-    def get_session_stats(self, session_id: int, user_id: int) -> Dict[str, Any]:
+    def get_session_stats(self, session_id: int, user_id: str) -> Dict[str, Any]:
         """Get session statistics"""
         # Verify ownership
-        session = self.db.query(ChatSession).filter(
-            ChatSession.id == session_id,
-            ChatSession.user_id == user_id
-        ).first()
-        
-        if not session:
+        response = self.supabase.table('chat_sessions').select('id')\
+            .eq('id', session_id)\
+            .eq('user_id', str(user_id))\
+            .execute()
+            
+        if not response.data:
             return {}
         
         stats = self.long_term.get_session_stats(session_id)
@@ -188,6 +180,6 @@ class MemoryManager:
         return stats
 
 # Dependency function for FastAPI
-def get_memory_manager(db: Session = Depends(get_db)):
-    """Get memory manager instance"""
-    return MemoryManager(db)
+def get_memory_manager(supabase: Client = Depends(get_supabase_client)):
+    """Get memory manager instance using Supabase Client"""
+    return MemoryManager(supabase)

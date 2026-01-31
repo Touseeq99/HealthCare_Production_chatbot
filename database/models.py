@@ -1,62 +1,31 @@
 from datetime import datetime
 from sqlalchemy import Column, String, DateTime, Enum, Text, ForeignKey, JSON, Integer, Boolean, Index
-from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
+from sqlalchemy.dialects.postgresql import UUID
+import uuid
+from .database import Base
 
-Base = declarative_base()
 
-class LoginAttempt(Base):
-    __tablename__ = 'login_attempts'
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    email = Column(String, nullable=False, index=True)
-    attempt_time = Column(DateTime, default=datetime.utcnow, nullable=False)
-    success = Column(Boolean, default=False, nullable=False)
-    ip_address = Column(String, nullable=True)
-    user_agent = Column(Text, nullable=True)
-    failure_reason = Column(String, nullable=True)  # e.g., 'invalid_password', 'account_locked'
-    
-    # Optimized indexes
-    __table_args__ = (
-        Index('idx_login_attempts_email_attempt_time', 'email', 'attempt_time'),
-        Index('idx_login_attempts_success', 'success'),
-        Index('idx_login_attempts_attempt_time', 'attempt_time'),
-        Index('idx_login_attempts_ip_address', 'ip_address'),
-    )
 
 class User(Base):
     __tablename__ = 'users'
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     email = Column(String, unique=True, nullable=False)
-    role = Column(Enum('patient', 'doctor', 'admin', name='user_roles'), nullable=False)
+    role = Column(Enum('patient', 'doctor', 'admin', 'unassigned', name='user_roles'), nullable=False)
     name = Column(String, nullable=False)
     surname = Column(String, nullable=False)
     phone = Column(String, nullable=True)
     specialization = Column(String, nullable=True)
     doctor_register_number = Column(String, nullable=True)
-    hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
-    # Email verification fields
-    email_verified = Column(Boolean, default=False, nullable=False)
-    email_verification_token = Column(String, nullable=True)
-    email_verification_expires = Column(DateTime, nullable=True)
-    
-    # Password reset fields
-    password_reset_token = Column(String, nullable=True)
-    password_reset_expires = Column(DateTime, nullable=True)
-
     # Optimized indexes
     __table_args__ = (
         Index('idx_users_email', 'email'),
         Index('idx_users_role', 'role'),
         Index('idx_users_created_at', 'created_at'),
-        Index('idx_users_email_verified', 'email_verified'),
-        Index('idx_users_email_verification_token', 'email_verification_token'),
-        Index('idx_users_password_reset_token', 'password_reset_token'),
-        Index('idx_users_password_reset_expires', 'password_reset_expires'),
     )
 
     # Use string-based relationships to avoid circular imports
@@ -69,7 +38,7 @@ class Article(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     title = Column(String, nullable=False)
     content = Column(Text, nullable=False)
-    author_id = Column(Integer, ForeignKey('users.id'), nullable=False)
+    author_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     status = Column(String, default='draft', nullable=False)
@@ -81,7 +50,7 @@ class ChatSession(Base):
     __tablename__ = 'chat_sessions'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False, index=True)
+    user_id = Column(UUID(as_uuid=True), ForeignKey('users.id'), nullable=False, index=True)
     session_name = Column(String(200), nullable=True)  # Optional session name
     session_type = Column(Enum('patient', 'doctor', name='session_types'), nullable=False, default='patient')
     status = Column(Enum('active', 'archived', 'deleted', name='session_status'), default='active')
@@ -135,21 +104,7 @@ class ConversationContext(Base):
     session = relationship("ChatSession", backref="context")
 
 
-class RefreshToken(Base):
-    __tablename__ = 'refresh_tokens'
 
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    token = Column(String, unique=True, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey('users.id'), nullable=False)
-    expires_at = Column(DateTime, nullable=False)
-    is_revoked = Column(Boolean, default=False, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    last_used_at = Column(DateTime, nullable=True)
-    ip_address = Column(String, nullable=True)
-    user_agent = Column(Text, nullable=True)
-
-    # Relationships
-    user = relationship("User", backref="refresh_tokens")
 
 
 class ResearchPaper(Base):

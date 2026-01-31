@@ -1,9 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy.orm import Session
-from database.database import get_db
-from database.models import User
 from utils.auth_dependencies import get_current_user
 from memory.memory_manager import get_memory_manager, MemoryManager
 from config import settings
@@ -14,6 +11,7 @@ from utils.validation import (
     MessageRequest, SessionCreateRequest, ValidationMiddleware, 
     SQLInjectionProtection, RateLimitValidation
 )
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +32,7 @@ router = APIRouter()
 async def stream_response(
     request: Request,
     message: MessageRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     try:
@@ -61,7 +59,7 @@ async def stream_response(
         
         # Save user message to memory
         memory.add_message(
-            session_id=session.id,
+            session_id=session['id'],
             user_id=current_user.id,
             content=message.message,
             role='user'
@@ -70,7 +68,7 @@ async def stream_response(
         # Get context for LLM (last 2 messages + some long-term context)
         try:
             context = memory.get_context_for_llm(
-                session_id=session.id,
+                session_id=session['id'],
                 include_long_term=True,
                 long_term_limit=3
             )
@@ -93,7 +91,7 @@ async def stream_response(
         
         # Capture IDs before streaming to avoid DetachedInstanceError
         user_id = current_user.id
-        session_id = session.id
+        session_id = session['id']
         
         # Track assistant response
         assistant_response = ""
@@ -136,17 +134,20 @@ async def stream_response(
                 'X-Accel-Buffering': 'no',
                 'Content-Type': 'text/event-stream',
                 'Transfer-Encoding': 'chunked',
-                'X-Session-ID': str(session.id)
+                'X-Session-ID': str(session['id'])
             }
         )
     except Exception as e:
         logger.error(f"FATAL ERROR in stream_response: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="An error occurred while processing your message."
+        )
 
 @router.post("/patient/sessions", response_model=SessionResponse)
 async def create_session(
     session_data: SessionCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Create a new chat session"""
@@ -157,21 +158,25 @@ async def create_session(
         )
         
         if session_data.session_name:
-            memory.long_term.update_session_name(session.id, session_data.session_name)
+            memory.long_term.update_session_name(session['id'], session_data.session_name)
         
         return SessionResponse(
-            session_id=session.id,
-            session_name=session.session_name,
-            message_count=session.message_count,
-            created_at=session.created_at.isoformat(),
-            last_message_at=session.last_message_at.isoformat() if session.last_message_at else None
+            session_id=session['id'],
+            session_name=session['session_name'],
+            message_count=session['message_count'],
+            created_at=session['created_at'],
+            last_message_at=session['last_message_at']
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error creating session: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Failed to create a new session."
+        )
 
 @router.get("/patient/sessions")
 async def get_sessions(
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Get all user sessions"""
@@ -179,27 +184,45 @@ async def get_sessions(
         sessions = memory.get_user_sessions(current_user.id)
         return {"sessions": sessions}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching sessions: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Failed to retrieve chat sessions."
+        )
 
 @router.get("/patient/sessions/{session_id}/history")
 async def get_session_history(
     session_id: int,
     limit: int = 50,
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Get session message history"""
     try:
+        # Verify ownership
+        session = memory.get_session(session_id, current_user.id)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, 
+                detail="Session not found or access denied."
+            )
+            
         history = memory.get_session_history(session_id, limit)
         return {"session_id": session_id, "messages": history}
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error fetching history for session {session_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Failed to retrieve message history."
+        )
 
 @router.put("/patient/sessions/{session_id}")
 async def update_session(
     session_id: int,
     session_data: SessionCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Update session name"""
@@ -217,21 +240,25 @@ async def update_session(
         updated_session = memory.get_session(session_id, current_user.id)
         
         return SessionResponse(
-            session_id=updated_session.id,
-            session_name=updated_session.session_name,
-            message_count=updated_session.message_count,
-            created_at=updated_session.created_at.isoformat(),
-            last_message_at=updated_session.last_message_at.isoformat() if updated_session.last_message_at else None
+            session_id=updated_session['id'],
+            session_name=updated_session['session_name'],
+            message_count=updated_session['message_count'],
+            created_at=updated_session['created_at'],
+            last_message_at=updated_session['last_message_at']
         )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error updating session {session_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Failed to update session."
+        )
 
 @router.delete("/patient/sessions/{session_id}")
 async def delete_session(
     session_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Delete a session"""
@@ -243,12 +270,16 @@ async def delete_session(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error deleting session {session_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Failed to delete session."
+        )
 
 @router.get("/patient/sessions/{session_id}/stats")
 async def get_session_stats(
     session_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: Any = Depends(get_current_user),
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Get session statistics"""
@@ -260,4 +291,8 @@ async def get_session_stats(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Error getting stats for session {session_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
+            detail="Failed to retrieve session statistics."
+        )

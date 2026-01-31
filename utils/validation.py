@@ -62,7 +62,7 @@ class UserCreateRequest(BaseModel, SecurityValidationMixin):
     password: constr(min_length=8, max_length=128)
     name: constr(min_length=1, max_length=100)
     surname: constr(min_length=1, max_length=100)
-    role: constr(pattern=r'^(patient|doctor|admin)$')
+    role: constr(pattern=r'^(patient|doctor|admin|unassigned)$')
     phone: Optional[constr(max_length=20)] = None
     specialization: Optional[constr(max_length=200)] = None
     doctor_register_number: Optional[constr(max_length=50)] = None
@@ -86,7 +86,8 @@ class UserCreateRequest(BaseModel, SecurityValidationMixin):
 class LoginRequest(BaseModel, SecurityValidationMixin):
     email: EmailStr
     password: constr(min_length=1, max_length=128)
-    role: constr(pattern=r'^(patient|doctor|admin)$')
+    # Note: role is sometimes optional in Supabase flow if already assigned
+    role: Optional[constr(pattern=r'^(patient|doctor|admin|unassigned)$')] = None
     
     @validator('email')
     def validate_email(cls, v):
@@ -115,46 +116,6 @@ class SessionCreateRequest(BaseModel, SecurityValidationMixin):
             return cls.sanitize_html(v)
         return v
 
-class RefreshTokenRequest(BaseModel, SecurityValidationMixin):
-    refresh_token: constr(min_length=10, max_length=500)
-    
-    @validator('refresh_token')
-    def validate_token_format(cls, v):
-        # Basic JWT token format validation
-        if not re.match(r'^[A-Za-z0-9-_]+\.[A-Za-z0-9-_]+\.[A-Za-z0-9-_]*$', v):
-            raise ValueError("Invalid token format")
-        return v.strip()
-
-class EmailVerificationRequest(BaseModel, SecurityValidationMixin):
-    token: constr(min_length=10, max_length=500)
-    
-    @validator('token')
-    def validate_token(cls, v):
-        if not re.match(r'^[A-Za-z0-9-_]+$', v):
-            raise ValueError("Invalid token format")
-        return v.strip()
-
-class PasswordResetRequest(BaseModel, SecurityValidationMixin):
-    token: constr(min_length=10, max_length=500)
-    new_password: constr(min_length=8, max_length=128)
-    
-    @validator('new_password')
-    def validate_new_password(cls, v):
-        return cls.validate_password_strength(v)
-    
-    @validator('token')
-    def validate_token(cls, v):
-        if not re.match(r'^[A-Za-z0-9-_]+$', v):
-            raise ValueError("Invalid token format")
-        return v.strip()
-
-class PasswordResetEmailRequest(BaseModel, SecurityValidationMixin):
-    email: EmailStr
-    
-    @validator('email')
-    def validate_email(cls, v):
-        return cls.validate_email_format(v)
-
 class ArticleCreateRequest(BaseModel, SecurityValidationMixin):
     title: constr(min_length=1, max_length=500)
     content: constr(min_length=1, max_length=50000)
@@ -166,7 +127,7 @@ class ArticleCreateRequest(BaseModel, SecurityValidationMixin):
 
 class AdminUserSearchRequest(BaseModel, SecurityValidationMixin):
     email: Optional[EmailStr] = None
-    role: Optional[constr(pattern=r'^(patient|doctor|admin)$')] = None
+    role: Optional[constr(pattern=r'^(patient|doctor|admin|unassigned)$')] = None
     page: Optional[int] = 1
     limit: Optional[int] = 50
     

@@ -15,10 +15,10 @@ def clear_database():
     print("⚠️  WARNING: This will delete ALL data in the database!")
     print("Tables to be cleared:")
     
-    # Get all table names from the models
+    # Get all table names from the updated models
     tables = [
-        'login_attempts',
-        'refresh_tokens', 
+        'chat_messages',
+        'conversation_contexts',
         'chat_sessions',
         'articles',
         'research_paper_scores',
@@ -45,11 +45,9 @@ def clear_database():
             trans = conn.begin()
             
             try:
-                # Disable foreign key constraints temporarily (for PostgreSQL)
+                # Disable foreign key constraints temporarily (for PostgreSQL/Supabase)
                 if 'postgresql' in str(engine.url).lower():
                     conn.execute(text("SET session_replication_role = replica;"))
-                elif 'mysql' in str(engine.url).lower():
-                    conn.execute(text("SET FOREIGN_KEY_CHECKS = 0;"))
                 elif 'sqlite' in str(engine.url).lower():
                     conn.execute(text("PRAGMA foreign_keys = OFF;"))
                 
@@ -58,49 +56,40 @@ def clear_database():
                     print(f"  Deleting from {table}...")
                     conn.execute(text(f"DELETE FROM {table}"))
                 
-                # Reset auto-increment sequences
+                # Reset auto-increment sequences for tables with Integer IDs
+                # Note: users table uses UUID, so no sequence to reset for its PK
                 print("  Resetting auto-increment sequences...")
                 if 'postgresql' in str(engine.url).lower():
-                    # PostgreSQL sequences
                     sequences = [
-                        'login_attempts_id_seq',
-                        'refresh_tokens_id_seq',
+                        'chat_messages_id_seq',
+                        'conversation_contexts_id_seq',
                         'chat_sessions_id_seq', 
                         'articles_id_seq',
                         'research_paper_scores_id_seq',
                         'research_paper_keywords_id_seq',
                         'research_paper_comments_id_seq',
-                        'research_papers_id_seq',
-                        'users_id_seq'
+                        'research_papers_id_seq'
                     ]
                     for seq in sequences:
                         try:
                             conn.execute(text(f"ALTER SEQUENCE {seq} RESTART WITH 1"))
                         except Exception as e:
-                            print(f"    Warning: Could not reset sequence {seq}: {e}")
+                            print(f"    Warning: Could not reset sequence {seq} (expected if not exists): {e}")
                             
-                elif 'mysql' in str(engine.url).lower():
-                    # MySQL auto-increment
-                    for table in tables:
-                        conn.execute(text(f"ALTER TABLE {table} AUTO_INCREMENT = 1"))
-                        
                 elif 'sqlite' in str(engine.url).lower():
-                    # SQLite auto-increment
                     for table in tables:
                         conn.execute(text(f"DELETE FROM sqlite_sequence WHERE name='{table}'"))
                 
                 # Re-enable foreign key constraints
                 if 'postgresql' in str(engine.url).lower():
                     conn.execute(text("SET session_replication_role = DEFAULT;"))
-                elif 'mysql' in str(engine.url).lower():
-                    conn.execute(text("SET FOREIGN_KEY_CHECKS = 1;"))
                 elif 'sqlite' in str(engine.url).lower():
                     conn.execute(text("PRAGMA foreign_keys = ON;"))
                 
                 # Commit transaction
                 trans.commit()
                 print("\n✅ Database cleared successfully!")
-                print("All tables are now empty and IDs will start from 1.")
+                print("All tables are now empty.")
                 
             except Exception as e:
                 trans.rollback()
@@ -118,12 +107,11 @@ def show_database_info():
             # Get database type
             db_type = str(engine.url).split('+')[0].split(':')[0]
             print(f"Database Type: {db_type}")
-            print(f"Database URL: {engine.url}")
             
             # Count records in each table
             tables = [
-                'login_attempts',
-                'refresh_tokens',
+                'chat_messages',
+                'conversation_contexts',
                 'chat_sessions', 
                 'articles',
                 'research_paper_scores',
@@ -140,7 +128,7 @@ def show_database_info():
                     count = result.scalar()
                     print(f"  {table}: {count} records")
                 except Exception as e:
-                    print(f"  {table}: Error - {e}")
+                    print(f"  {table}: Table not found or error - {e}")
                     
     except Exception as e:
         print(f"Error connecting to database: {e}")
@@ -150,7 +138,7 @@ if __name__ == "__main__":
         show_database_info()
     else:
         print("=== Database Clearing Script ===")
-        print("This script will delete ALL data and reset IDs.")
+        print("This script will delete ALL data and reset sequences.")
         print()
         show_database_info()
         print()

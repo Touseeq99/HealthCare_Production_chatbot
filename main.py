@@ -10,16 +10,13 @@ from typing import Dict, Any
 import os
 from utils.logger import logger, setup_logging
 from config import settings
-from utils.cache_invalidation import setup_cache_listeners
-from api import (auth, patient_chat_v2, admin, doctor_chat_v2, evidence, email_auth, article)
+from api import (auth, patient_chat_v2, admin, doctor_chat_v2, evidence, article)
 from dotenv import load_dotenv
 
 load_dotenv()
 # Initialize logging
 setup_logging()
 
-# Setup cache invalidation listeners
-setup_cache_listeners()
 
 # Initialize FastAPI with rate limiting
 app = FastAPI(
@@ -49,7 +46,6 @@ app.add_middleware(
 
 # Include routers
 app.include_router(auth.router, prefix="/api/auth", tags=["authentication"])
-app.include_router(email_auth.router, prefix="/api/auth", tags=["email-auth"])
 app.include_router(evidence.router)
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"]) 
 app.include_router(article.router, prefix="/api", tags=["articles"])
