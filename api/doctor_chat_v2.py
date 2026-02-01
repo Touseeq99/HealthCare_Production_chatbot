@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, Request, Depends, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from utils.auth_dependencies import get_current_user
@@ -11,26 +11,26 @@ from utils.validation import (
     MessageRequest, SessionCreateRequest, ValidationMiddleware, 
     SQLInjectionProtection, RateLimitValidation
 )
+from utils.error_handler import (
+    AppException, AuthorizationError, NotFoundError, 
+    DatabaseError, ExternalServiceError
+)
+from utils.logger import get_request_id
 from typing import Optional, Any
 import time
 
 logger = logging.getLogger(__name__)
 
-# Legacy models for backward compatibility
-class Message(BaseModel):
-    message: str
-    session_id: Optional[int] = None
-
+# Legacy models
 class SessionResponse(BaseModel):
     session_id: int
     session_name: str
     message_count: int
     created_at: str
-    last_message_at: str = None
+    last_message_at: Optional[str] = None
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
-
 router = APIRouter()
 
 @router.post("/doctor/stream")
@@ -41,20 +41,15 @@ async def stream_response(
     current_user: Any = Depends(get_current_user),
     memory: MemoryManager = Depends(get_memory_manager)
 ):
-    # Enhanced validation
-    await ValidationMiddleware.validate_request_size(request, 2)  # 2MB limit
-    await ValidationMiddleware.validate_content_type(request, ["application/json"])
-    # Temporarily disabled for debugging
-    # await ValidationMiddleware.validate_user_agent(request)
-    # await ValidationMiddleware.validate_ip_address(request)
-    
-    # SQL injection protection
-    SQLInjectionProtection.validate_input_safety(message.message)
-    
-    # Rate limiting based on user role
-    rate_config = RateLimitValidation.get_rate_limit_config("chat", current_user.role)
-    # Note: This would need Redis integration for per-user tracking
+    """Streaming chat response for doctors with RAG context"""
     try:
+        # Enhanced validation
+        await ValidationMiddleware.validate_request_size(request, 2)
+        await ValidationMiddleware.validate_content_type(request, ["application/json"])
+        
+        # SQL injection protection
+        SQLInjectionProtection.validate_input_safety(message.message)
+        
         # Create or get session
         session = memory.create_or_get_session(
             user_id=current_user.id,
@@ -70,51 +65,42 @@ async def stream_response(
             role='user'
         )
         
-        # Get context for LLM (last 2 messages + some long-term context)
+        # Get context for LLM
         context = memory.get_context_for_llm(
             session_id=session['id'],
             include_long_term=True,
             long_term_limit=3
         )
         
-        # Start timing the total process
         start_time = time.time()
-        
-        # Import here to avoid circular imports
         from utils.doctor_response import doctor_response_with_context
         
-        # Get the async generator with context
-        stream = await doctor_response_with_context(message.message, context)
+        # Get the async generator
+        try:
+            stream = await doctor_response_with_context(message.message, context)
+        except Exception as e:
+            logger.error(f"LLM Connection failed: {str(e)}")
+            raise ExternalServiceError("OpenAI", str(e))
         
-        # Capture IDs before streaming to avoid DetachedInstanceError
         user_id = current_user.id
         session_id = session['id']
-        
-        # Track assistant response
         assistant_response = ""
         
         async def generate_with_memory():
             nonlocal assistant_response
             try:
-                logger.info("Starting streaming response...")
                 async for chunk in stream:
-                    # chunk is already a string content from doctor_response_with_context
                     if chunk:
                         assistant_response += chunk
                         yield chunk
-                logger.info(f"Streaming completed. Final assistant response length: {len(assistant_response)}")
             except Exception as e:
-                logger.error(f"Error in streaming: {e}", exc_info=True)
-                yield "data: Sorry, I encountered an error processing your request.\n\n"
+                logger.error(f"Streaming error: {e}", extra={"request_id": get_request_id()})
+                yield "data: [ERROR] Sorry, I encountered a connection issue. Please try again.\n\n"
             finally:
-                # Calculate and log total processing time
                 total_duration = time.time() - start_time
-                logger.info(f"Total processing time for doctor RAG answer: {total_duration:.4f} seconds")
+                logger.info(f"Stream duration: {total_duration:.2f}s")
                 
-                # Save assistant response to memory
-                logger.info(f"Finally block executing. Assistant response length: {len(assistant_response)}")
                 if assistant_response.strip():
-                    logger.info("Saving assistant response to memory...")
                     try:
                         memory.add_message(
                             session_id=session_id,
@@ -122,31 +108,22 @@ async def stream_response(
                             content=assistant_response,
                             role='assistant'
                         )
-                        logger.info("Assistant response saved successfully")
-                    except Exception as save_error:
-                        logger.error(f"Error saving assistant response: {save_error}", exc_info=True)
-                else:
-                    logger.warning("Assistant response is empty, not saving to memory")
+                    except Exception as save_err:
+                        logger.error(f"Failed to save assistant response: {save_err}")
         
-        # Create the streaming response
         return StreamingResponse(
             content=generate_with_memory(),
             media_type="text/event-stream",
             headers={
                 'Cache-Control': 'no-cache',
-                'Connection': 'keep-alive',
-                'X-Accel-Buffering': 'no',
-                'Content-Type': 'text/event-stream',
-                'Transfer-Encoding': 'chunked',
                 'X-Session-ID': str(session['id'])
             }
         )
+    except AppException:
+        raise
     except Exception as e:
-        logger.error(f"Error in doctor stream_response: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="An error occurred while processing your request."
-        )
+        logger.error(f"Fatal error in stream_response: {str(e)}", exc_info=True)
+        raise DatabaseError("Failed to process chat request")
 
 @router.post("/doctor/sessions", response_model=SessionResponse)
 async def create_session(
@@ -172,11 +149,8 @@ async def create_session(
             last_message_at=session['last_message_at']
         )
     except Exception as e:
-        logger.error(f"Error creating doctor session: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Failed to create session."
-        )
+        logger.error(f"Error creating session: {str(e)}")
+        raise DatabaseError("Failed to create chat session")
 
 @router.get("/doctor/sessions")
 async def get_sessions(
@@ -188,11 +162,8 @@ async def get_sessions(
         sessions = memory.get_user_sessions(current_user.id)
         return {"sessions": sessions}
     except Exception as e:
-        logger.error(f"Error fetching doctor sessions: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Failed to retrieve sessions."
-        )
+        logger.error(f"Error fetching sessions: {str(e)}")
+        raise DatabaseError("Failed to retrieve chat history")
 
 @router.get("/doctor/sessions/{session_id}/history")
 async def get_session_history(
@@ -202,25 +173,17 @@ async def get_session_history(
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Get session message history"""
+    # Verify ownership
+    session = memory.get_session(session_id, current_user.id)
+    if not session:
+        raise AuthorizationError("Session not found or access denied")
+        
     try:
-        # Verify ownership
-        session = memory.get_session(session_id, current_user.id)
-        if not session:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                detail="Session not found or access denied."
-            )
-            
         history = memory.get_session_history(session_id, limit)
         return {"session_id": session_id, "messages": history}
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error fetching history for doctor session {session_id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Failed to retrieve history."
-        )
+        logger.error(f"Error fetching history: {str(e)}")
+        raise DatabaseError("Failed to retrieve session messages")
 
 @router.put("/doctor/sessions/{session_id}")
 async def update_session(
@@ -230,19 +193,15 @@ async def update_session(
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Update session name"""
+    session = memory.get_session(session_id, current_user.id)
+    if not session:
+        raise NotFoundError("Session")
+    
     try:
-        # Verify session belongs to user
-        session = memory.get_session(session_id, current_user.id)
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        
-        # Update session name if provided
         if session_data.session_name:
             memory.long_term.update_session_name(session_id, session_data.session_name)
         
-        # Get updated session info
         updated_session = memory.get_session(session_id, current_user.id)
-        
         return SessionResponse(
             session_id=updated_session['id'],
             session_name=updated_session['session_name'],
@@ -250,14 +209,9 @@ async def update_session(
             created_at=updated_session['created_at'],
             last_message_at=updated_session['last_message_at']
         )
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error updating doctor session {session_id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Failed to update session."
-        )
+        logger.error(f"Error updating session: {str(e)}")
+        raise DatabaseError("Failed to update session name")
 
 @router.delete("/doctor/sessions/{session_id}")
 async def delete_session(
@@ -269,16 +223,13 @@ async def delete_session(
     try:
         success = memory.delete_session(session_id, current_user.id)
         if not success:
-            raise HTTPException(status_code=404, detail="Session not found")
+            raise NotFoundError("Session")
         return {"message": "Session deleted successfully"}
-    except HTTPException:
+    except AppException:
         raise
     except Exception as e:
-        logger.error(f"Error deleting doctor session {session_id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Failed to delete session."
-        )
+        logger.error(f"Error deleting session: {str(e)}")
+        raise DatabaseError("Failed to delete session")
 
 @router.get("/doctor/sessions/{session_id}/stats")
 async def get_session_stats(
@@ -287,16 +238,7 @@ async def get_session_stats(
     memory: MemoryManager = Depends(get_memory_manager)
 ):
     """Get session statistics"""
-    try:
-        stats = memory.get_session_stats(session_id, current_user.id)
-        if not stats:
-            raise HTTPException(status_code=404, detail="Session not found")
-        return stats
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error getting stats for doctor session {session_id}: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-            detail="Failed to retrieve statistics."
-        )
+    stats = memory.get_session_stats(session_id, current_user.id)
+    if not stats:
+        raise NotFoundError("Session")
+    return stats

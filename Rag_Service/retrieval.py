@@ -23,14 +23,23 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 
+# Initialize the indices (Done once on startup)
+try:
+    init_doctor_db()
+    init_expertopinion_db()
+    init_patientopinion_db()
+except Exception as e:
+    logger.error(f"Failed to initialize Pinecone indices: {e}")
 
-# Initialize the indices
-init_doctor_db()
-init_expertopinion_db()
-init_patientopinion_db()
-
-# Create PineconeVectorStore instances
+# Global instances for reuse
 embeddings = OpenAIEmbeddings(api_key=os.getenv("OPENAI_API_KEY"))
+
+# Global Reranker - pay initialization price once
+try:
+    reranker = PineconeRerank(top_n=3)
+except Exception as e:
+    logger.error(f"Failed to initialize Reranker: {e}")
+    reranker = None
 
 vector_doc_db = PineconeVectorStore.from_existing_index(
     index_name=DOCTOR_INDEX,
@@ -56,6 +65,10 @@ vector_stores = {
 
 def _process_docs(docs, query):
     """Helper to process and rerank documents"""
+    if not docs:
+        logger.info("No documents retrieved from vector DB.")
+        return {'reranked_docs': [], 'file_names': []}
+
     logger.info(f"Retrieved {len(docs)} documents from vector DB")
     
     # Create mapping of document content to metadata (including file names)
@@ -63,10 +76,15 @@ def _process_docs(docs, query):
     for doc in docs:
         content_to_metadata[doc.page_content] = doc.metadata
     
+    # If reranker failed to init, return raw docs (fallback)
+    if not reranker:
+        logger.warning("Reranker not available, returning raw documents")
+        return {
+            'reranked_docs': [doc.page_content for doc in docs[:3]],
+            'file_names': [doc.metadata.get('file_name', 'Unknown') for doc in docs[:3]]
+        }
+
     logger.info("Starting reranking...")
-    # Reduced top_n to 3 for speed
-    reranker = PineconeRerank(top_n=3)
-    
     reranked_docs = reranker.rerank(
         query=query,
         documents=[doc.page_content for doc in docs]
@@ -111,13 +129,13 @@ def query_doc(query: str, index_type: str = 'research'):
         if not store:
             raise ValueError(f"Invalid index_type: {index_type}")
 
-        # Get similar documents - Reduced k to 5 for speed
-        logger.info("Attempting similarity search...")
-        docs = store.similarity_search(query, k=5)
+        # Increased k to 10 for better reranking quality
+        logger.info(f"Attempting similarity search on {index_type} (k=10)...")
+        docs = store.similarity_search(query, k=10)
         
         result = _process_docs(docs, query)
         
-        logger.info("query_doc completed successfully")
+        logger.info(f"query_doc on {index_type} completed successfully")
         return result
         
     except Exception as e:
@@ -136,9 +154,9 @@ async def aquery_doc(query: str, index_type: str = 'research'):
         if not store:
             raise ValueError(f"Invalid index_type: {index_type}")
 
-        # Get similar documents asynchronously - Reduced k to 5 for speed
-        logger.info(f"Attempting async similarity search on {index_type}...")
-        docs = await store.asimilarity_search(query, k=5)
+        # Increased k to 10 for better reranking quality
+        logger.info(f"Attempting async similarity search on {index_type} (k=10)...")
+        docs = await store.asimilarity_search(query, k=10)
         
         # Run processing/reranking in a thread pool
         loop = asyncio.get_running_loop()

@@ -166,31 +166,102 @@ CREATE TRIGGER on_auth_user_created
 -- ==============================================================================
 -- 5. ROW LEVEL SECURITY (RLS)
 -- ==============================================================================
+
+-- Enable RLS on all tables
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
+-- Enable RLS on all tables (Idempotent)
+ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.articles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.conversation_contexts ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.research_papers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.research_paper_scores ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.research_paper_keywords ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.research_paper_comments ENABLE ROW LEVEL SECURITY;
 
--- Users can view their own profile
-CREATE POLICY "Users can view own profile" ON public.users FOR SELECT USING (auth.uid() = id);
--- Users can update their own profile
-CREATE POLICY "Users can update own profile" ON public.users FOR UPDATE USING (auth.uid() = id);
--- Doctors are viewable by everyone
-CREATE POLICY "Doctors are public" ON public.users FOR SELECT USING (role = 'doctor');
--- Chat sessions ownership
-CREATE POLICY "Users govern own sessions" ON public.chat_sessions USING (auth.uid() = user_id);
--- Articles visibility
-CREATE POLICY "Published articles are public" ON public.articles FOR SELECT USING (status = 'published');
-CREATE POLICY "Authors manage own articles" ON public.articles USING (auth.uid() = author_id);
+-- 5.1 USERS POLICIES
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Users can view own profile' AND tablename = 'users') THEN
+        CREATE POLICY "Users can view own profile" ON public.users FOR SELECT USING (auth.uid() = id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Users can update own profile' AND tablename = 'users') THEN
+        CREATE POLICY "Users can update own profile" ON public.users FOR UPDATE USING (auth.uid() = id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Doctors are public' AND tablename = 'users') THEN
+        CREATE POLICY "Doctors are public" ON public.users FOR SELECT USING (role = 'doctor');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Admins can view all users' AND tablename = 'users') THEN
+        CREATE POLICY "Admins can view all users" ON public.users FOR SELECT USING (auth.uid() IN (SELECT id FROM public.users WHERE role = 'admin'));
+    END IF;
+END $$;
 
+-- 5.2 ARTICLES POLICIES
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Published articles are public' AND tablename = 'articles') THEN
+        CREATE POLICY "Published articles are public" ON public.articles FOR SELECT USING (status = 'published');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authors manage own articles' AND tablename = 'articles') THEN
+        CREATE POLICY "Authors manage own articles" ON public.articles USING (auth.uid() = author_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Admins manage all articles' AND tablename = 'articles') THEN
+        CREATE POLICY "Admins manage all articles" ON public.articles USING (auth.uid() IN (SELECT id FROM public.users WHERE role = 'admin'));
+    END IF;
+END $$;
 
+-- 5.3 CHAT SESSIONS POLICIES
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Users govern own sessions' AND tablename = 'chat_sessions') THEN
+        CREATE POLICY "Users govern own sessions" ON public.chat_sessions USING (auth.uid() = user_id);
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Admins view all sessions' AND tablename = 'chat_sessions') THEN
+        CREATE POLICY "Admins view all sessions" ON public.chat_sessions FOR SELECT USING (auth.uid() IN (SELECT id FROM public.users WHERE role = 'admin'));
+    END IF;
+END $$;
 
+-- 5.4 CHAT MESSAGES POLICIES
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Users view own messages' AND tablename = 'chat_messages') THEN
+        CREATE POLICY "Users view own messages" ON public.chat_messages FOR SELECT 
+        USING (EXISTS (SELECT 1 FROM public.chat_sessions WHERE id = chat_messages.session_id AND user_id = auth.uid()));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Users insert own messages' AND tablename = 'chat_messages') THEN
+        CREATE POLICY "Users insert own messages" ON public.chat_messages FOR INSERT 
+        WITH CHECK (EXISTS (SELECT 1 FROM public.chat_sessions WHERE id = chat_messages.session_id AND user_id = auth.uid()));
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Admins view all messages' AND tablename = 'chat_messages') THEN
+        CREATE POLICY "Admins view all messages" ON public.chat_messages FOR SELECT 
+        USING (auth.uid() IN (SELECT id FROM public.users WHERE role = 'admin'));
+    END IF;
+END $$;
 
+-- 5.5 CONTEXT POLICIES
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Users view own contexts' AND tablename = 'conversation_contexts') THEN
+        CREATE POLICY "Users view own contexts" ON public.conversation_contexts 
+        USING (EXISTS (SELECT 1 FROM public.chat_sessions WHERE id = conversation_contexts.session_id AND user_id = auth.uid()));
+    END IF;
+END $$;
 
+-- 5.6 RESEARCH DATA POLICIES
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users view research papers' AND tablename = 'research_papers') THEN
+        CREATE POLICY "Authenticated users view research papers" ON public.research_papers FOR SELECT USING (auth.role() = 'authenticated');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users view paper scores' AND tablename = 'research_paper_scores') THEN
+        CREATE POLICY "Authenticated users view paper scores" ON public.research_paper_scores FOR SELECT USING (auth.role() = 'authenticated');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users view paper keywords' AND tablename = 'research_paper_keywords') THEN
+        CREATE POLICY "Authenticated users view paper keywords" ON public.research_paper_keywords FOR SELECT USING (auth.role() = 'authenticated');
+    END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Authenticated users view paper comments' AND tablename = 'research_paper_comments') THEN
+        CREATE POLICY "Authenticated users view paper comments" ON public.research_paper_comments FOR SELECT USING (auth.role() = 'authenticated');
+    END IF;
+END $$;
 
-
-
-
-
-
-
-
+-- 5.7 ADMIN ONLY MANAGEMENT
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Admins manage research' AND tablename = 'research_papers') THEN
+        CREATE POLICY "Admins manage research" ON public.research_papers USING (auth.uid() IN (SELECT id FROM public.users WHERE role = 'admin'));
+    END IF;
+END $$;

@@ -1,185 +1,240 @@
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, status, Request, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from supabase import Client
 
-# Import Supabase client
 from utils.supabase_client import get_supabase_client
 from utils.auth_dependencies import get_current_user
 from config import settings
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+from utils.error_handler import (
+    AppException, AuthorizationError, NotFoundError, 
+    DatabaseError, ValidationError
+)
+from utils.logger import log_admin_action, get_request_id
 
-# Initialize rate limiter
+logger = logging.getLogger(__name__)
 limiter = Limiter(key_func=get_remote_address)
-
 router = APIRouter()
 
-@router.get("/users", response_model=Dict[str, Any])
+# ============== Pydantic Models ==============
+class UserRoleUpdate(BaseModel):
+    role: str  # patient, doctor, admin
+
+class ArticleUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    status: Optional[str] = None  # published, draft
+
+# ============== USER STATISTICS ==============
+@router.get("/stats", response_model=Dict[str, Any])
 @limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
-async def get_users(
+async def get_stats(
     request: Request,
     current_user: Any = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client)
 ) -> JSONResponse:
-    # Check if user is admin
+    """Get dashboard statistics (Admin only)"""
     if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
+        raise AuthorizationError("Admin access required")
     try:
-        # Get counts using Supabase
         users_response = supabase.table('users').select('*', count='exact').execute()
-        total_users = users_response.count or 0
-        
         patients_response = supabase.table('users').select('*', count='exact').eq('role', 'patient').execute()
-        active_patients = patients_response.count or 0
-        
         doctors_response = supabase.table('users').select('*', count='exact').eq('role', 'doctor').execute()
-        active_doctors = doctors_response.count or 0
-        
         sessions_response = supabase.table('chat_sessions').select('*', count='exact').execute()
-        chat_sessions = sessions_response.count or 0
         
-        return JSONResponse(
-            status_code=200,
-            content={
-                "totalUsers": total_users,
-                "activePatients": active_patients,
-                "activeDoctors": active_doctors,
-                "chatSessions": chat_sessions
-            }
-        )
+        return JSONResponse(status_code=200, content={
+            "totalUsers": users_response.count or 0,
+            "activePatients": patients_response.count or 0,
+            "activeDoctors": doctors_response.count or 0,
+            "chatSessions": sessions_response.count or 0
+        })
     except Exception as e:
-        logger.error(f"Admin search error: {str(e)}")
-        return JSONResponse(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            content={"error": "Internal server error"}
-        )
+        logger.error(f"Admin stats error: {str(e)}")
+        raise DatabaseError("Failed to retrieve system statistics")
 
-
-
-# Pydantic models
-class ArticleBase(BaseModel):
-    title: str
-    content: str
-    author_id: Optional[str] = None
-    author: Optional[str] = None
-    
-    class Config:
-        extra = 'forbid'  # Reject any extra fields
-
-class ArticleResponse(ArticleBase):
-    id: int
-    created_at: datetime
-    status: str
-
-    class Config:
-        from_attributes = True
-
-# Article API
-@router.get("/articles", response_model=List[Dict[str, Any]])
+# ============== LIST ALL USERS (with details) ==============
+@router.get("/users", response_model=List[Dict[str, Any]])
 @limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
-async def get_articles(
+async def list_all_users(
     request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    role_filter: Optional[str] = Query(None),
     current_user: Any = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client)
 ):
-    # Check if user is admin
+    """List all users with pagination (Admin only)"""
     if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
+        raise AuthorizationError()
     try:
-        response = supabase.table('articles').select('*').eq('status', 'published').execute()
-        articles = response.data or []
-        return [
-            {
-                "id": article['id'],
-                "title": article['title'],
-                "content": article['content'],
-                "author_id": str(article['author_id']),
-                "created_at": article['created_at'],
-                "status": article['status']
-            }
-            for article in articles
-        ]
+        offset = (page - 1) * limit
+        query = supabase.table('users').select('id, email, name, role, created_at, updated_at')
+        
+        if role_filter:
+            query = query.eq('role', role_filter)
+        
+        response = query.order('created_at', desc=True).range(offset, offset + limit - 1).execute()
+        return response.data or []
     except Exception as e:
-        logger.error(f"Admin fetch articles error: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error"
-        )
+        logger.error(f"List users error: {str(e)}")
+        raise DatabaseError("Failed to list users")
 
-@router.post("/articles", response_model=Dict[str, Any], status_code=201)
+# ============== CHANGE USER ROLE ==============
+@router.put("/users/{user_id}/role")
 @limiter.limit(f"{settings.RATE_LIMIT}/minute")
-async def create_article(
+async def change_user_role(
     request: Request,
-    article_data: ArticleBase, 
+    user_id: str,
+    role_data: UserRoleUpdate,
     current_user: Any = Depends(get_current_user),
     supabase: Client = Depends(get_supabase_client)
 ):
-    # Check if user is admin
+    """Change a user's role (Admin only)"""
     if current_user.role != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required"
-        )
-    try:
-        print(f"Received article data: {article_data}")
-        
-        # Use the current admin user as the author
-        author_id = str(current_user.id)
-        
-        # Create article with all required fields
-        article_insert = {
-            "title": article_data.title,
-            "content": article_data.content,
-            "author_id": author_id,
-            "status": "published",
-            "created_at": datetime.utcnow().isoformat(),
-            "updated_at": datetime.utcnow().isoformat()
-        }
-        print(f"Creating article: {article_insert}")
-        
-        try:
-            response = supabase.table('articles').insert(article_insert).execute()
-            if not response.data:
-                raise Exception("Failed to create article")
-            
-            article = response.data[0]
-            print(f"Article created successfully: {article['id']}")
-            
-            return {
-                "id": article['id'],
-                "title": article['title'],
-                "content": article['content'],
-                "author": "Admin",
-                "date": article['created_at'],
-                "status": article['status']
-            }
-            
-        except Exception as db_error:
-            logger.error(f"Database error during article creation: {str(db_error)}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Database operation failed"
-            )
-            
-    except HTTPException as he:
-        print(f"HTTP Exception: {he.detail}")
-        raise he
-        
-    except Exception as e:
-        logger.error(f"Unexpected admin error: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error"
-        )
-
+        raise AuthorizationError()
     
+    allowed_roles = ["patient", "doctor", "admin"]
+    if role_data.role not in allowed_roles:
+        raise ValidationError(f"Invalid role. Must be one of: {allowed_roles}")
+    
+    # Prevent self-demotion
+    if str(current_user.id) == user_id and role_data.role != "admin":
+        raise ValidationError("Cannot demote yourself from admin")
+    
+    try:
+        response = supabase.table('users').update({
+            "role": role_data.role,
+            "updated_at": datetime.utcnow().isoformat()
+        }).eq('id', user_id).execute()
+        
+        if not response.data:
+            raise NotFoundError("User")
+        
+        # AUDIT LOGGING
+        log_admin_action(
+            action="CHANGE_ROLE",
+            admin_id=str(current_user.id),
+            target=user_id,
+            details={"new_role": role_data.role}
+        )
+        
+        return {"message": f"User role updated to {role_data.role}", "user": response.data[0]}
+    except AppException:
+        raise
+    except Exception as e:
+        logger.error(f"Change role error: {str(e)}")
+        raise DatabaseError("Failed to update user role")
+
+# ============== VIEW CHAT SESSION LOGS ==============
+@router.get("/sessions")
+@limiter.limit(f"{settings.RATE_LIMIT * 2}/minute")
+async def get_all_sessions(
+    request: Request,
+    page: int = Query(1, ge=1),
+    limit: int = Query(20, ge=1, le=100),
+    user_id: Optional[str] = Query(None),
+    session_type: Optional[str] = Query(None),
+    current_user: Any = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """Get all chat sessions with filters (Admin only)"""
+    if current_user.role != "admin":
+        raise AuthorizationError()
+    try:
+        offset = (page - 1) * limit
+        query = supabase.table('chat_sessions').select('*')
+        
+        if user_id:
+            query = query.eq('user_id', user_id)
+        if session_type:
+            query = query.eq('session_type', session_type)
+        
+        response = query.order('created_at', desc=True).range(offset, offset + limit - 1).execute()
+        return {"sessions": response.data or [], "page": page, "limit": limit}
+    except Exception as e:
+        logger.error(f"Get sessions error: {str(e)}")
+        raise DatabaseError("Failed to list sessions")
+
+@router.get("/sessions/{session_id}/messages")
+async def get_session_messages(
+    request: Request,
+    session_id: int,
+    limit: int = Query(100, ge=1, le=500),
+    current_user: Any = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """Get all messages from a specific session (Admin only)"""
+    if current_user.role != "admin":
+        raise AuthorizationError()
+    try:
+        # Get messages
+        messages_response = supabase.table('chat_messages')\
+            .select('*')\
+            .eq('session_id', session_id)\
+            .order('created_at', desc=False)\
+            .limit(limit)\
+            .execute()
+        
+        return {"session_id": session_id, "messages": messages_response.data or []}
+    except Exception as e:
+        logger.error(f"Get session messages error: {str(e)}")
+        raise DatabaseError("Failed to fetch messages")
+
+# ============== ARTICLE MANAGEMENT ==============
+@router.put("/articles/{article_id}")
+async def update_article(
+    request: Request,
+    article_id: int,
+    article_data: ArticleUpdate,
+    current_user: Any = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """Update an article (Admin only)"""
+    if current_user.role != "admin":
+        raise AuthorizationError()
+    try:
+        update_data = {"updated_at": datetime.utcnow().isoformat()}
+        if article_data.title: update_data["title"] = article_data.title
+        if article_data.content: update_data["content"] = article_data.content
+        if article_data.status: update_data["status"] = article_data.status
+        
+        response = supabase.table('articles').update(update_data).eq('id', article_id).execute()
+        if not response.data:
+            raise NotFoundError("Article")
+        
+        log_admin_action("UPDATE_ARTICLE", str(current_user.id), str(article_id))
+        return {"message": "Article updated successfully", "article": response.data[0]}
+    except AppException:
+        raise
+    except Exception as e:
+        logger.error(f"Update article error: {str(e)}")
+        raise DatabaseError("Failed to update article")
+
+@router.delete("/articles/{article_id}")
+async def delete_article(
+    request: Request,
+    article_id: int,
+    current_user: Any = Depends(get_current_user),
+    supabase: Client = Depends(get_supabase_client)
+):
+    """Delete an article (Admin only)"""
+    if current_user.role != "admin":
+        raise AuthorizationError()
+    try:
+        response = supabase.table('articles').delete().eq('id', article_id).execute()
+        if not response.data:
+            raise NotFoundError("Article")
+        
+        log_admin_action("DELETE_ARTICLE", str(current_user.id), str(article_id))
+        return {"message": "Article deleted successfully"}
+    except AppException:
+        raise
+    except Exception as e:
+        logger.error(f"Delete article error: {str(e)}")
+        raise DatabaseError("Failed to delete article")

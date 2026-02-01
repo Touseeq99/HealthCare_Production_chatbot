@@ -45,20 +45,24 @@ class LongTermMemory:
             
         saved_message = response.data[0]
         
-        # Update session message count and last message time
-        # In a real app, you might use a DB trigger for count, but here we'll do it manually or via RPC
-        # For simplicity, we'll fetch and update
+        # Fetch current message_count and increment it
+        session_response = self.supabase.table('chat_sessions')\
+            .select('message_count')\
+            .eq('id', session_id)\
+            .single()\
+            .execute()
+        
+        current_count = session_response.data.get('message_count', 0) if session_response.data else 0
+        
         now = datetime.utcnow().isoformat()
-        # We can use a relative update in some clients, but here we just update last_message_at
         self.supabase.table('chat_sessions').update({
+            "message_count": current_count + 1,
             "last_message_at": now,
             "updated_at": now
         }).eq('id', session_id).execute()
         
-        # Increment message_count - Best done via RPC in Supabase, but for now:
-        # Actually message_count increment is better handled via a trigger.
-        
         return saved_message
+
     
     def get_session_messages(self, session_id: int, limit: int = 50) -> List[Dict[str, Any]]:
         """Get messages from a session using Supabase Client"""
