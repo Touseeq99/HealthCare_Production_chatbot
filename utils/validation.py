@@ -236,23 +236,28 @@ class RateLimitValidation:
 # SQL Injection Protection
 
 class SQLInjectionProtection:
-    """SQL injection protection utilities"""
+    """SQL injection protection utilities.
+    
+    NOTE: Supabase uses parameterized queries via PostgREST, so traditional SQL injection
+    is not a realistic attack vector. This is a defense-in-depth measure that catches
+    only genuinely dangerous combined patterns, not individual English words like
+    'SELECT', 'UPDATE', 'UNION' which appear frequently in medical text.
+    """
     
     @staticmethod
     def detect_sql_injection(text: str) -> bool:
-        """Detect potential SQL injection patterns"""
+        """Detect potential SQL injection patterns (medical-text safe)"""
         if not text:
             return False
         
-        # Common SQL injection patterns
+        # Only catch genuinely dangerous COMBINED patterns, not individual SQL keywords
+        # Medical text regularly contains words like SELECT, UPDATE, UNION
         sql_patterns = [
-            r"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|CREATE|ALTER|EXEC|UNION)\b)",
-            r"(--|#|/\*|\*/)",
-            r"(\bOR\b.*=.*\bOR\b)",
-            r"(\bAND\b.*=.*\bAND\b)",
-            r"('.*'|\".*\")\s*(=|LIKE)",
-            r"(1\s*=\s*1|1\s*=\s*1\s*--)",
-            r"(;\s*(DROP|DELETE|UPDATE|INSERT))"
+            r";\s*(DROP|DELETE|UPDATE|INSERT|ALTER|CREATE)\s",  # Statement chaining
+            r"(1\s*=\s*1|1\s*=\s*1\s*--)",                     # Tautology attacks
+            r"('|\");\s*--",                                     # String termination + comment
+            r"UNION\s+ALL\s+SELECT",                            # UNION injection
+            r"/\*.*\*/",                                        # Block comment injection
         ]
         
         for pattern in sql_patterns:

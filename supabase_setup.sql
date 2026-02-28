@@ -265,3 +265,30 @@ DO $$ BEGIN
         CREATE POLICY "Admins manage research" ON public.research_papers USING (auth.uid() IN (SELECT id FROM public.users WHERE role = 'admin'));
     END IF;
 END $$;
+
+-- ==============================================================================
+-- 6. RPC FUNCTIONS
+-- ==============================================================================
+
+-- Atomic message_count increment (eliminates race condition)
+CREATE OR REPLACE FUNCTION public.increment_message_count(
+    p_session_id INTEGER,
+    p_last_message_at TEXT,
+    p_updated_at TEXT
+)
+RETURNS VOID AS $$
+BEGIN
+    UPDATE public.chat_sessions
+    SET 
+        message_count = message_count + 1,
+        last_message_at = p_last_message_at::TIMESTAMP WITH TIME ZONE,
+        updated_at = p_updated_at::TIMESTAMP WITH TIME ZONE
+    WHERE id = p_session_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ==============================================================================
+-- 7. SERVICE ROLE BYPASS (allows backend service key to bypass RLS)
+-- ==============================================================================
+-- The backend uses SUPABASE_SERVICE_KEY which automatically bypasses RLS.
+-- No additional policies needed for the service role.

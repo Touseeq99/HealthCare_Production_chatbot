@@ -5,6 +5,7 @@ fastapi>=0.100.0
 pydantic[email]>=2.0.0
 pydantic-settings>=2.0.0
 python-jose[cryptography]>=3.3.0
+PyJWT>=2.8.0
 passlib[bcrypt]
 python-multipart>=0.0.6
 sqlalchemy>=2.0.0
@@ -16,6 +17,7 @@ pinecone
 langchain
 langchain-pinecone
 langchain-openai
+pdf2image
 
 # Testing dependencies
 pytest>=7.0.0

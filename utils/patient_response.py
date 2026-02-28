@@ -28,7 +28,7 @@ async def patient_response(message, max_retries=3):
     for attempt in range(max_retries):
         try:
             stream = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 messages=[
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": message}
@@ -71,7 +71,7 @@ async def patient_response_with_context(message, context_messages, max_retries=3
     for attempt in range(max_retries):
         try:
             stream = await client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4.1-mini",
                 messages=messages,
                 stream=True,
                 timeout=30.0,

@@ -17,7 +17,7 @@ from utils.error_handler import (
     unhandled_exception_handler
 )
 from config import settings
-from api import (auth, patient_chat_v2, admin, doctor_chat_v2, evidence, article)
+from api import (auth, patient_chat_v2, admin, doctor_chat_v2, evidence, article, clinical_note, ddx)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -42,13 +42,15 @@ app.add_exception_handler(AppException, app_exception_handler)
 app.add_exception_handler(HTTPException, http_exception_handler)
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
-allowed = os.getenv("ALLOWED_ORIGIN")
-# Configure CORS
-origins = [allowed]
+allowed = os.getenv("ALLOWED_ORIGIN", "https://metamedmd.com")
+# Configure CORS - use env variable + localhost for dev
+origins = ["http://localhost:3000"]
+if allowed:
+    origins.append(allowed)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://metamedmd.com"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"], 
@@ -96,6 +98,8 @@ app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(article.router, prefix="/api", tags=["articles"])
 app.include_router(patient_chat_v2.router, prefix="/api", tags=["chat"])
 app.include_router(doctor_chat_v2.router, prefix="/api", tags=["chat"])
+app.include_router(clinical_note.router, prefix="/api", tags=["Clinical Notes"])
+app.include_router(ddx.router, prefix="/api", tags=["Differential Diagnosis"])
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check() -> Dict[str, str]:

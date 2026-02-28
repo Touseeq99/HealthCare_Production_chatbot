@@ -12,6 +12,9 @@ from utils.auth_dependencies import get_current_user
 from config import settings
 from slowapi import Limiter
 from slowapi.util import get_remote_address
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -76,9 +79,10 @@ async def get_articles_for_patients(
             for article in articles
         ]
     except Exception as e:
+        logger.error(f"Error fetching articles: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail={"error": "Internal server error", "details": str(e)}
+            detail="An error occurred while fetching articles"
         )
 
 @router.get("/articles/{article_id}", response_model=PatientArticleResponse)
@@ -119,9 +123,10 @@ async def get_article_by_id(
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error fetching article {article_id}: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail={"error": "Internal server error", "details": str(e)}
+            detail="An error occurred while fetching this article"
         )
 
 # Admin endpoints (keeping existing functionality)
@@ -156,9 +161,10 @@ async def get_articles_admin(
             for article in articles
         ]
     except Exception as e:
+        logger.error(f"Error fetching admin articles: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail={"error": "Internal server error", "details": str(e)}
+            detail="An error occurred while fetching articles"
         )
 
 @router.post("/admin/articles", response_model=Dict[str, Any], status_code=201)
@@ -209,22 +215,17 @@ async def create_article(
             }
             
         except Exception as db_error:
+            logger.error(f"DB error creating article: {str(db_error)}", exc_info=True)
             raise HTTPException(
                 status_code=500,
-                detail={
-                    "error": "Database operation failed",
-                    "details": str(db_error)
-                }
+                detail="Failed to create article"
             )
             
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Error creating article: {str(e)}", exc_info=True)
         raise HTTPException(
             status_code=500,
-            detail={
-                "error": "Internal server error",
-                "type": type(e).__name__,
-                "details": str(e)
-            }
+            detail="An internal error occurred"
         )

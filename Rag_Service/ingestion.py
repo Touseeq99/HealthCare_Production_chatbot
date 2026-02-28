@@ -40,7 +40,7 @@ def flatten_metadata(metadata):
 
 def ingestion_docs_doctor(file: str, rating_metadata: dict = None):
     """
-    Ingest a document into the vector database with only rating metadata.
+    Ingest a document into the vector database with rating metadata AND document metadata.
     
     Args:
         file (str): Path to the document file
@@ -75,16 +75,40 @@ def ingestion_docs_doctor(file: str, rating_metadata: dict = None):
         else:
             rating_meta['is_rated'] = False
         
+        # Batch all documents for efficient Pinecone upsert
+        all_docs = []
         for chunk in chunks:
-            # Create document with only rating metadata
+            # Merge rating metadata with document metadata (file_name, page, source, etc.)
+            chunk_metadata = rating_meta.copy()
+            
+            # Extract key fields from document parser metadata
+            parser_meta = chunk.get('metadata', {})
+            chunk_metadata.update({
+                'file_name': parser_meta.get('file_name', os.path.basename(file)),
+                'source': parser_meta.get('source', file),
+                'page_number': parser_meta.get('page_number', 0),
+                'chunk_id': parser_meta.get('chunk_id', 0),
+                'total_chunks': parser_meta.get('total_chunks', 0),
+                'word_count': parser_meta.get('word_count', 0),
+            })
+            
             doc = Document(
                 page_content=chunk['text'],
-                metadata=rating_meta.copy()  # Use a copy to avoid reference issues
+                metadata=chunk_metadata
             )
-            logger.debug(f"Adding chunk to vector database with rating metadata: {rating_meta}")
-            vector_Db_doc.add_documents([doc])
+            all_docs.append(doc)
+        
+        # Batch insert (much faster than one-at-a-time)
+        if all_docs:
+            BATCH_SIZE = 50
+            for i in range(0, len(all_docs), BATCH_SIZE):
+                batch = all_docs[i:i + BATCH_SIZE]
+                vector_Db_doc.add_documents(batch)
+                logger.info(f"Ingested batch {i // BATCH_SIZE + 1} ({len(batch)} docs)")
+            
+            logger.info(f"Successfully ingested {len(all_docs)} chunks from {os.path.basename(file)}")
     except Exception as e:
-        print(f"Error: {str(e)}")
+        logger.error(f"Error ingesting {file}: {str(e)}")
         import traceback
         traceback.print_exc()
  

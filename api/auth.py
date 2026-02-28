@@ -107,13 +107,12 @@ async def verify_token(current_user: Any = Depends(get_current_user)):
 @router.post("/logout")
 async def logout(current_user: Any = Depends(get_current_user)):
     """
-    Note: Logout should primarily happen on the frontend via supabase.auth.signOut().
-    This endpoint is provided for server-side state clearing if needed.
+    Server-side logout acknowledgment.
+    
+    NOTE: Actual session invalidation happens client-side via supabase.auth.signOut().
+    The server uses a SERVICE_KEY client, so calling sign_out() on it would
+    sign out the server's service role — NOT the user. This endpoint exists 
+    for client-side state coordination only.
     """
-    supabase = get_supabase_client()
-    try:
-        if supabase:
-            supabase.auth.sign_out()
-        return {"success": True, "message": "Logged out"}
-    except Exception:
-        return {"success": True, "message": "Logged out"}
+    logger.info(f"Logout requested by user: {current_user.id}")
+    return {"success": True, "message": "Logged out. Please clear your session client-side."}

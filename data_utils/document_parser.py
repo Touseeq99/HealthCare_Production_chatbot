@@ -11,7 +11,7 @@ from dataclasses import dataclass, asdict
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
+ 
 class DocumentChunker:
     def __init__(
         self,
@@ -274,7 +274,7 @@ class DocumentChunker:
         }
 
     def _preprocess_text(self, text: str) -> str:
-        """Clean and preprocess the extracted text."""
+        """Clean and preprocess the extracted text while preserving structural markers."""
         if not text:
             return ""
             
@@ -289,8 +289,8 @@ class DocumentChunker:
         text = re.sub(r'\n{3,}', '\n\n', text)
         text = re.sub(r' {2,}', ' ', text)
         
-        # Clean up common PDF artifacts
-        text = re.sub(r'\s*[-•*]\s*', ' ', text)  # Bullet points
+        # Clean up PDF artifacts (but PRESERVE bullet points — critical for medical guidelines)
+        # Bullet points carry structural meaning in clinical recommendations
         text = re.sub(r'\f', '\n', text)  # Form feeds
         
         return text

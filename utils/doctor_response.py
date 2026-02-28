@@ -1,11 +1,8 @@
 import time
-import json
-import os
-from datetime import datetime
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 import asyncio
-from Rag_Service.retrieval import query_doc, aquery_doc
+from Rag_Service.retrieval import query_doc, aquery_doc, aquery_doc_with_embedding, embed_query
 import logging
 
 load_dotenv()
@@ -16,83 +13,72 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def log_rag_interaction(question: str, context: str):
-    """Log the question and retrieved context to a JSON file"""
+    """Log the question and retrieved context using structured logging (not file I/O)"""
     try:
-        log_entry = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "question": question,
-            "context": context
-        }
-        
-        log_file = "testinglog.json"
-        
-        # inconsistent implementation suitable for dev/testing
-        if os.path.exists(log_file):
-            try:
-                with open(log_file, 'r', encoding='utf-8') as f:
-                    logs = json.load(f)
-                    if not isinstance(logs, list):
-                        logs = []
-            except Exception:
-                logs = []
-        else:
-            logs = []
-            
-        logs.append(log_entry)
-        
-        with open(log_file, 'w', encoding='utf-8') as f:
-            json.dump(logs, f, indent=2, ensure_ascii=False)
-            
-        logger.info(f"Logged RAG interaction to {log_file}")
+        logger.info(
+            "RAG interaction",
+            extra={
+                "rag_question": question[:200],
+                "rag_context_length": len(context),
+                "rag_context_preview": context[:500]
+            }
+        )
     except Exception as e:
         logger.error(f"Failed to log RAG interaction: {e}")
 
-# COMPRESSED SYSTEM PROMPT - More token efficient for lower latency
 # COMPRESSED SYSTEM PROMPT - More token efficient for lower latency
 CLINICAL_PROMPT = """
 You are a Senior Consultant Cardiologist (EP & AF Speciality).
 Your task is to provide evidence-based clinical decision support based ONLY on the provided retrieval context.
 
 ## Output Structure (STRICTLY FOLLOW THIS ORDER)
-You must generate the response using the exact headers and numbering below. Do not reorder or skip sections.
+You must generate the response using the exact headers and numbering below. Do not reorder or skip sections. Use **bold text** for critical findings and key clinical terms.
 
 1. **Clinical Takeaway (Synthesis)**
-   - Provide 3-5 bullet points synthesizing the key clinical insights.
+   - Provide 3-5 high-impact bullet points synthesizing the key clinical insights.
+   - Use **bold** for primary recommendations/findings.
 
 2. **Research Evidence**
-   - Summarize guidelines and trials found strictly in the 'RESEARCH EVIDENCE' context block.
+   - Use a clear bulleted list to summarize guidelines and trials found strictly in the 'RESEARCH EVIDENCE' context block.
+   - Format: "- **[Trial/Guideline Name]**: [One-line summary of findings]"
    - If empty, state: "No specific research evidence provided."
 
 3. **Expert Opinion**
-   - Summarize clinical nuance and expert views found strictly in the 'EXPERT OPINION' context block.
+   - Use a bulleted list to summarize clinical nuance and expert views found strictly in the 'EXPERT OPINION' context block.
+   - Focus on practical applications and clinical judgment.
    - If empty, state: "No specific expert opinion provided."
 
 4. **Patient Perspectives**
-   - Summarize patient values and lived experiences found strictly in the 'PATIENT OPINION' context block.
+   - Use a bulleted list to summarize patient values and lived experiences found strictly in the 'PATIENT OPINION' context block.
    - If empty, state: "No specific patient perspectives provided."
 
 5. **Decision Context**
-   - Provide integration strategies for clinical decision-making.
+   - Synthesize the above via a bulleted list of integration strategies for clinical decision-making.
 
 6. **Limitations**
-   - Note any uncertainties or lack of information in the sources.
+   - Note any uncertainties or lack of information in the sources using bullet points.
 
 7. **Emergency Indicators**
-   - List any red flags or emergency indicators mentioned in the sources. If none, state: "None mentioned."
+   - Use a bolded, bulleted list of any red flags or emergency indicators mentioned in the sources.
+   - If none, state: "None mentioned."
 
 8. **Sources Used**
-   - List the specific documents/files used, categorized by type.
+   - Catagorize sources by type using bullet points:
+     - Research: [Source 1, Source 2]
+     - Expert: [Source A, Source B]
+     - Patient: [Source X]
 
 9. **Guideline Concordance**
-   - Format: **Rating:** [Green/Amber/Red] - [1-line justification]
+   - Format: **Rating:** [Green/Amber/Red] - [1-line justification in bold]
 
 10. **Confidence Meter**
-    - Format: **Score:** [0.00-1.00]
+    - Format: **Score:** [0.00-1.00] - [Brief rationale for the score]
 
 11. **Conclusion**
-    - Provide a concise CLARA summary.
+    - Provide a concise 2-3 sentence CLARA summary closing the report.
 
 ## Rules
+- **Formatting**: Always maximize readability with bullet points and **bold text** for emphasis.
 - **No Hallucinations**: If specific information is not in the context, explicitly state that it is missing.
 - **Partitioning**: Do not mix information. Research goes in Section 2, Expert in Section 3, Patient in Section 4.
 - **Citations**: Cite sources for every claim, e.g., (Source: Document Name).
@@ -160,7 +146,7 @@ async def doctor_response(question: str, context: str = None) -> str:
             logger.info("Detected greeting intent, skipping RAG.")
             llm_start = time.time()
             stream = await client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4.1-mini",
                 messages=[
                     {"role": "system", "content": CONVERSATIONAL_PROMPT},
                     {"role": "user", "content": question}
@@ -171,15 +157,21 @@ async def doctor_response(question: str, context: str = None) -> str:
             )
         else:
             # Perform RAG for clinical queries
+            # Step 1: Compute embedding ONCE (saves ~400ms vs computing 3x)
             rag_start = time.time()
+            query_embedding = await embed_query(question)
+            embed_time = time.time()
+            logger.info(f"PERF: Embedding computed in {embed_time - rag_start:.2f}s")
+            
+            # Step 2: Search all 3 indices in parallel using pre-computed embedding
             results = await asyncio.gather(
-                aquery_doc(question, 'research'),
-                aquery_doc(question, 'expert'),
-                aquery_doc(question, 'patient'),
+                aquery_doc_with_embedding(question, query_embedding, 'research'),
+                aquery_doc_with_embedding(question, query_embedding, 'expert'),
+                aquery_doc_with_embedding(question, query_embedding, 'patient'),
                 return_exceptions=True
             )
             rag_end = time.time()
-            logger.info(f"PERF: RAG Retrieval took {rag_end - rag_start:.2f}s")
+            logger.info(f"PERF: RAG Retrieval took {rag_end - rag_start:.2f}s (embedding: {embed_time - rag_start:.2f}s, search: {rag_end - embed_time:.2f}s)")
             
             research_result, expert_result, patient_result = results
             
@@ -200,7 +192,7 @@ async def doctor_response(question: str, context: str = None) -> str:
             
             llm_start = time.time()
             stream = await client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4.1-mini",
                 messages=[
                     {"role": "system", "content": CLINICAL_PROMPT},
                     {"role": "user", "content": full_message}
@@ -208,7 +200,7 @@ async def doctor_response(question: str, context: str = None) -> str:
                 stream=True,
                 temperature=0.1,  
                 max_tokens=1500
-            )
+            )   
         
         async def generate():
             first_token = True
@@ -249,7 +241,7 @@ async def doctor_response_with_context(question: str, conversation_context: list
 
             llm_start = time.time()
             stream = await client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4.1-mini",
                 messages=messages,
                 stream=True,
                 temperature=0.7,
@@ -257,15 +249,21 @@ async def doctor_response_with_context(question: str, conversation_context: list
             )
 
         else:
+            # Step 1: Compute embedding ONCE (saves ~400ms vs computing 3x)
             rag_start = time.time()
+            query_embedding = await embed_query(question)
+            embed_time = time.time()
+            logger.info(f"PERF: Embedding computed in {embed_time - rag_start:.2f}s")
+            
+            # Step 2: Search all 3 indices in parallel using pre-computed embedding
             results = await asyncio.gather(
-                aquery_doc(question, 'research'),
-                aquery_doc(question, 'expert'),
-                aquery_doc(question, 'patient'),
+                aquery_doc_with_embedding(question, query_embedding, 'research'),
+                aquery_doc_with_embedding(question, query_embedding, 'expert'),
+                aquery_doc_with_embedding(question, query_embedding, 'patient'),
                 return_exceptions=True
             )
             rag_end = time.time()
-            logger.info(f"PERF: RAG Retrieval took {rag_end - rag_start:.2f}s")
+            logger.info(f"PERF: RAG Retrieval took {rag_end - rag_start:.2f}s (embedding: {embed_time - rag_start:.2f}s, search: {rag_end - embed_time:.2f}s)")
             
             research_result, expert_result, patient_result = results
             
@@ -293,7 +291,7 @@ async def doctor_response_with_context(question: str, conversation_context: list
             
             llm_start = time.time()
             stream = await client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4.1-mini",
                 messages=messages,
                 stream=True,
                 temperature=0.1,  
