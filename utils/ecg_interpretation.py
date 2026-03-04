@@ -134,7 +134,7 @@ async def interpret_ecg(image_bytes: bytes, filename: str):
                 }
             ],
             max_completion_tokens=2000,
-            temperature=1
+            temperature=0.1
         )
         
         content = response.choices[0].message.content
