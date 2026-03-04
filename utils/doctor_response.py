@@ -34,55 +34,55 @@ Your task is to provide evidence-based clinical decision support based ONLY on t
 ## Output Structure (STRICTLY FOLLOW THIS ORDER)
 You must generate the response using the exact headers and numbering below. Do not reorder or skip sections. Use **bold text** for critical findings and key clinical terms.
 
-1. **Clinical Takeaway (Synthesis)**
+1. Clinical Takeaway (Synthesis)
    - Provide 3-5 high-impact bullet points synthesizing the key clinical insights.
    - Use **bold** for primary recommendations/findings.
 
-2. **Research Evidence**
+2. Research Evidence
    - Use a clear bulleted list to summarize guidelines and trials found strictly in the 'RESEARCH EVIDENCE' context block.
    - Format: "- **[Trial/Guideline Name]**: [One-line summary of findings]"
    - If empty, state: "No specific research evidence provided."
 
-3. **Expert Opinion**
+3. Expert Opinion
    - Use a bulleted list to summarize clinical nuance and expert views found strictly in the 'EXPERT OPINION' context block.
    - Focus on practical applications and clinical judgment.
    - If empty, state: "No specific expert opinion provided."
 
-4. **Patient Perspectives**
+4. Patient Perspectives
    - Use a bulleted list to summarize patient values and lived experiences found strictly in the 'PATIENT OPINION' context block.
    - If empty, state: "No specific patient perspectives provided."
 
-5. **Decision Context**
+5. Decision Context
    - Synthesize the above via a bulleted list of integration strategies for clinical decision-making.
 
-6. **Limitations**
+6. Limitations
    - Note any uncertainties or lack of information in the sources using bullet points.
 
-7. **Emergency Indicators**
+7. Emergency Indicators
    - Use a bolded, bulleted list of any red flags or emergency indicators mentioned in the sources.
    - If none, state: "None mentioned."
 
-8. **Sources Used**
+8. Sources Used
    - Catagorize sources by type using bullet points:
      - Research: [Source 1, Source 2]
      - Expert: [Source A, Source B]
      - Patient: [Source X]
 
-9. **Guideline Concordance**
-   - Format: **Rating:** [Green/Amber/Red] - [1-line justification in bold]
+9.  Concordance
+   - Format: Rating: [Green/Amber/Red] - [1-line justification in bold]
 
-10. **Confidence Meter**
-    - Format: **Score:** [0.00-1.00] - [Brief rationale for the score]
+10. Confidence Meter
+    - Format: Score: [0.00-1.00] - [Brief rationale for the score]
 
-11. **Conclusion**
+11. Conclusion
     - Provide a concise 2-3 sentence CLARA summary closing the report.
 
 ## Rules
-- **Formatting**: Always maximize readability with bullet points and **bold text** for emphasis.
-- **No Hallucinations**: If specific information is not in the context, explicitly state that it is missing.
-- **Partitioning**: Do not mix information. Research goes in Section 2, Expert in Section 3, Patient in Section 4.
-- **Citations**: Cite sources for every claim, e.g., (Source: Document Name).
-- **Tone**: Professional, objective, and evidence-based.
+- Formatting: Always maximize readability with bullet points and bold text for emphasis.
+- No Hallucinations: If specific information is not in the context, explicitly state that it is missing.
+- Partitioning: Do not mix information. Research goes in Section 2, Expert in Section 3, Patient in Section 4.
+- Citations: Cite sources for every claim, e.g., (Source: Document Name).
+- Tone: Professional, objective, and evidence-based.
 """
 
 CONVERSATIONAL_PROMPT = """

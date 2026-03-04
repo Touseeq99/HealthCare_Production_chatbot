@@ -17,7 +17,7 @@ from utils.error_handler import (
     unhandled_exception_handler
 )
 from config import settings
-from api import (auth, patient_chat_v2, admin, doctor_chat_v2, evidence, article, clinical_note, ddx)
+from api import (auth, patient_chat_v2, admin, doctor_chat_v2, evidence, article, clinical_note, ddx, ecg)
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -100,6 +100,7 @@ app.include_router(patient_chat_v2.router, prefix="/api", tags=["chat"])
 app.include_router(doctor_chat_v2.router, prefix="/api", tags=["chat"])
 app.include_router(clinical_note.router, prefix="/api", tags=["Clinical Notes"])
 app.include_router(ddx.router, prefix="/api", tags=["Differential Diagnosis"])
+app.include_router(ecg.router, prefix="/api", tags=["ECG Interpretation"])
 
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check() -> Dict[str, str]:

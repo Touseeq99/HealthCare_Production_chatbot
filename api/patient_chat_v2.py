@@ -97,7 +97,7 @@ async def stream_response(
                 yield "data: [ERROR] I'm sorry, I'm having trouble connecting right now. Please try again.\n\n"
             finally:
                 total_duration = time.time() - start_time
-                logger.info(f"Stream duration: {total_duration:.2fs}")
+                logger.info(f"Stream duration: {total_duration:.2f}s")
                 
                 if assistant_response.strip():
                     try:
