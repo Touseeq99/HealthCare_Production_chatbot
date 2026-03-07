@@ -118,7 +118,7 @@ async def interpret_ecg(image_bytes: bytes, filename: str):
         logger.info(f"Sending ECG image {filename} to GPT-4o Vision for interpretation")
         
         response = await client.chat.completions.create(
-            model="gpt-5-mini",
+            model="gpt-4O",
             messages=[
                 {
                     "role": "user",
