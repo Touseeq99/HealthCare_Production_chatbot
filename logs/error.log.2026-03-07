@@ -1,0 +1,1 @@
+{"timestamp": "2026-03-07T12:43:14.567783", "level": "ERROR", "name": "root", "message": "Auth error: Session from session_id claim in JWT does not exist", "request_id": "9a7bb00c", "logger": "root", "file": "D:\\metamed_backend\\utils\\auth_dependencies.py", "line": 57, "function": "get_current_user"}

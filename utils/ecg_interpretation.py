@@ -74,6 +74,10 @@ Return a JSON object with the following fields:
     "confirmed": "<Confirmed / Unconfirmed>"
   },
   "overall_classification": "<Normal / Borderline / Abnormal / Critical>",
+  "ai_confidence": {
+    "score": "<percentage 0-100%>",
+    "reasoning": "<brief explanation of why this confidence score was given (e.g. artifact, poor image quality, clear image)>"
+  },
   "flags": ["<list any critical findings e.g. STEMI pattern, VT, complete heart block>"]
 }
 
@@ -101,6 +105,7 @@ Format the summary under the heading: ## Clinical Summary
 - Flag any potentially life-threatening findings prominently under "flags".
 """
 
+
 async def interpret_ecg(image_bytes: bytes, filename: str):
     """
     Interpret an ECG image using GPT-4o Vision.
@@ -115,10 +120,10 @@ async def interpret_ecg(image_bytes: bytes, filename: str):
         if ext == 'jpg':
             mime_type = "image/jpeg"
 
-        logger.info(f"Sending ECG image {filename} to GPT-4o Vision for interpretation")
+        logger.info(f"Sending ECG image {filename} to GPT-5 Vision for interpretation")
         
         response = await client.chat.completions.create(
-            model="gpt-4o",
+            model="gpt-5.1-2025-11-13",
             messages=[
                 {
                     "role": "user",
