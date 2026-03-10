@@ -11,98 +11,105 @@ client = AsyncOpenAI()
 logger = logging.getLogger(__name__)
 
 ECG_PROMPT = """
-You are a clinical ECG interpretation assistant. You will be given an image of a 12-lead ECG tracing. Your task is to systematically analyze the ECG and return a structured report suitable for review by a qualified physician.
+You are a board-certified cardiac electrophysiologist. Analyze this 12-lead 
+ECG image. You MUST follow the EXACT output format below. Do NOT add extra 
+text. Do NOT skip any section. Do NOT say "cannot determine" unless truly 
+impossible. Be precise and clinical.
 
----
+═══════════════════════════════════════════
+ECG ANALYSIS REPORT
+═══════════════════════════════════════════
 
-## INSTRUCTIONS
+[1] HEART RATE
+━━━━━━━━━━━━━━
+Rate: ___ bpm
+Category: [ ] Bradycardia <60 | [ ] Normal 60-100 | [ ] Tachycardia >100
 
-Analyze the ECG image and extract the following features. Return your response in two parts:
+[2] PRIMARY RHYTHM
+━━━━━━━━━━━━━━━━━
+Rhythm: ___________________________
+Tick ALL that apply:
+[ ] Normal Sinus Rhythm
+[ ] Sinus Tachycardia
+[ ] Sinus Bradycardia
+[ ] Ventricular Bigeminy
+[ ] Ventricular Trigeminy
+[ ] Atrial Fibrillation
+[ ] Other: _______________
 
-### PART 1 — STRUCTURED TABLE (JSON format)
+[3] PVC ANALYSIS
+━━━━━━━━━━━━━━━
+PVCs Present: [ ] YES  [ ] NO
+If YES:
+  Morphology: [ ] LBBB-type  [ ] RBBB-type  [ ] Other
+  Axis: [ ] Inferior  [ ] Superior  [ ] Normal
+  RVOT Origin Likely: [ ] YES  [ ] NO
+  Evidence for RVOT:
+    [ ] Tall R in II, III, aVF
+    [ ] LBBB morphology in V1
+    [ ] Late precordial transition (V4-V5)
+    [ ] Monophasic R in inferior leads
+  Compensatory Pause: [ ] YES  [ ] NO
+  P wave before PVC: [ ] YES  [ ] NO
+  QRS width of PVC: ___ ms
 
-Return a JSON object with the following fields:
+[4] INTERVALS
+━━━━━━━━━━━━
+PR Interval:  ___ ms  [ ] Normal | [ ] Short | [ ] Prolonged
+QRS Duration: ___ ms  [ ] Narrow  | [ ] Wide
+QT Interval:  ___ ms  [ ] Normal | [ ] Short | [ ] Prolonged
+QTc:          ___ ms  [ ] Normal | [ ] Borderline | [ ] Prolonged
 
-{
-  "rate": {
-    "value": "<e.g. 72 bpm>",
-    "interpretation": "<Normal / Bradycardia / Tachycardia>",
-    "normal_range": "60–100 bpm"
-  },
-  "rhythm": {
-    "value": "<e.g. Coronary Sinus Rhythm / Normal Sinus / Atrial Fibrillation>",
-    "interpretation": "<Regular / Irregular>",
-    "notes": "<any relevant rhythm observations>"
-  },
-  "p_wave": {
-    "present": "<Yes / No / Unclear>",
-    "axis_degrees": "<value or N/A>",
-    "morphology": "<Normal / Inverted / Biphasic / Absent>",
-    "interpretation": "<Normal / Abnormal>",
-    "notes": "<e.g. retrograde P waves in inferior leads>"
-  },
-  "pr_interval": {
-    "value": "<ms or N/A>",
-    "interpretation": "<Normal / Prolonged / Short>",
-    "normal_range": "120–200 ms"
-  },
-  "qrs_complex": {
-    "duration": "<ms>",
-    "axis_degrees": "<value>",
-    "morphology": "<Normal / LBBB / RBBB / Wide / Delta wave>",
-    "interpretation": "<Normal / Abnormal>",
-    "notes": "<any relevant QRS observations>"
-  },
-  "st_segment": {
-    "changes": "<None / Elevation / Depression>",
-    "leads_affected": "<list leads or None>",
-    "interpretation": "<Normal / Ischemia / Injury pattern / Pericarditis>"
-  },
-  "t_wave": {
-    "axis_degrees": "<value>",
-    "morphology": "<Normal / Inverted / Peaked / Flat>",
-    "leads_affected": "<list leads or None>",
-    "interpretation": "<Normal / Abnormal>"
-  },
-  "qtc_interval": {
-    "value": "<ms or estimated>",
-    "interpretation": "<Normal / Prolonged / Short>",
-    "normal_range": "350–440 ms (male), 350–460 ms (female)"
-  },
-  "machine_diagnosis": {
-    "printed_label": "<e.g. Borderline ECG / Normal ECG>",
-    "confirmed": "<Confirmed / Unconfirmed>"
-  },
-  "overall_classification": "<Normal / Borderline / Abnormal / Critical>",
-  "ai_confidence": {
-    "score": "<percentage 0-100%>",
-    "reasoning": "<brief explanation of why this confidence score was given (e.g. artifact, poor image quality, clear image)>"
-  },
-  "flags": ["<list any critical findings e.g. STEMI pattern, VT, complete heart block>"]
-}
+[5] CARDIAC AXIS
+━━━━━━━━━━━━━━━
+QRS Axis: ___ degrees
+[ ] Normal (-30 to +90)
+[ ] Left Axis Deviation
+[ ] Right Axis Deviation
+[ ] Extreme Axis
 
----
+[6] WAVEFORM FINDINGS
+━━━━━━━━━━━━━━━━━━━━
+P Waves:    [ ] Normal | [ ] Absent | [ ] Abnormal → ___________
+QRS:        [ ] Narrow | [ ] Wide   | [ ] Delta wave present
+ST Segment: [ ] Normal | [ ] Elevated in: ___ | [ ] Depressed in: ___
+T Waves:    [ ] Normal | [ ] Inverted in: ___ | [ ] Peaked in: ___
+Q Waves:    [ ] None   | [ ] Pathological in: ___
 
-### PART 2 — CLINICAL SUMMARY (plain English for physician review)
+[7] SPECIAL PATTERNS
+━━━━━━━━━━━━━━━━━━━
+[ ] LVH (Sokolow-Lyon >35mm)
+[ ] RVH
+[ ] LBBB
+[ ] RBBB
+[ ] WPW / Pre-excitation
+[ ] Brugada Pattern
+[ ] Early Repolarization
+[ ] STEMI Pattern
+[ ] None of the above
 
-Write a concise 3–5 sentence clinical summary paragraph that includes:
-- The dominant rhythm and its origin
-- Rate and regularity
-- Any axis deviations
-- QRS, QT, and ST-T wave findings
-- Overall impression and recommendation for clinical correlation
+[8] FINAL IMPRESSION
+━━━━━━━━━━━━━━━━━━━
+Primary Diagnosis: _________________________________
+Secondary Findings: _________________________________
+Urgency Level: [ ] Routine | [ ] Soon | [ ] ⚠️ URGENT
+Recommended Action: _________________________________
 
-Format the summary under the heading: ## Clinical Summary
+═══════════════════════════════════════════
+⚠️ DISCLAIMER: For clinical reference only.
+Final interpretation must be confirmed by
+a licensed physician before any treatment.
+═══════════════════════════════════════════
 
----
-
-## RULES
-
-- Do NOT make a definitive diagnosis. Use language like "consistent with", "suggests", "findings may indicate".
-- Always include: "This report is auto-generated and requires review and confirmation by a qualified clinician."
-- If a feature cannot be clearly determined from the image, state "Unable to determine from image quality."
-- Do not hallucinate values. Only report what is visible or printed on the ECG tracing.
-- Flag any potentially life-threatening findings prominently under "flags".
+RULES YOU MUST FOLLOW:
+- Fill EVERY field
+- Use ONLY the format above
+- No paragraphs outside the format
+- No introductions or conclusions
+- Tick boxes must be filled as [✓]
+- Unknown values = "Unable to measure"
+- If URGENT finding detected, state it in 
+  red caps: ⚠️ URGENT: [reason]
 """
 
 
@@ -153,36 +160,16 @@ async def interpret_ecg(image_bytes: bytes, filename: str):
 
 def parse_ecg_response(content: str):
     """
-    Parses the GPT-4o response to extract JSON and Summary.
+    Parses the GPT response to extract the report.
+    Since the new prompt follows a strict text format, we return the entire content 
+    as both the clinical summary and raw content for the frontend to display.
     """
     try:
-        # Split into parts based on headings or markers
-        # The prompt asks for PART 1 and PART 2
-        
-        json_part = None
-        summary_part = None
-        
-        # Look for JSON block
-        if "```json" in content:
-            json_str = content.split("```json")[1].split("```")[0].strip()
-            json_part = json.loads(json_str)
-        elif "{" in content and "}" in content:
-            # Fallback if markdown blocks are missing
-            try:
-                # Try to extract the first JSON-like object
-                start = content.find("{")
-                end = content.rfind("}") + 1
-                json_part = json.loads(content[start:end])
-            except:
-                pass
-        
-        # Look for summary
-        if "## Clinical Summary" in content:
-            summary_part = content.split("## Clinical Summary")[1].strip()
-        
+        # The new prompt produces a single formatted clinical report.
+        # We return it in clinical_summary to maintain compatibility with existing API consumers.
         return {
-            "structured_data": json_part,
-            "clinical_summary": summary_part,
+            "structured_data": None,
+            "clinical_summary": content,
             "raw_content": content
         }
     except Exception as e:
