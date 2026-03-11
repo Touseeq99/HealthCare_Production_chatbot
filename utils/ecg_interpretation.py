@@ -10,107 +10,92 @@ load_dotenv()
 client = AsyncOpenAI()
 logger = logging.getLogger(__name__)
 
-ECG_PROMPT = """
-You are a board-certified cardiac electrophysiologist. Analyze this 12-lead 
-ECG image. You MUST follow the EXACT output format below. Do NOT add extra 
-text. Do NOT skip any section. Do NOT say "cannot determine" unless truly 
-impossible. Be precise and clinical.
+# ──────────────────────────────────────────────
+# CARDIOLOGIST PERSONA & SYSTEMATIC WORKFLOW
+# ──────────────────────────────────────────────
+ECG_SYSTEM_PROMPT = """You are a board-certified cardiologist and expert ECG interpreter with over 20 years of clinical experience in a tertiary cardiac care center. You have interpreted over 100,000 ECGs.
 
-═══════════════════════════════════════════
-ECG ANALYSIS REPORT
-═══════════════════════════════════════════
+Your task is to perform a complete, systematic 12-lead ECG interpretation following the standard cardiologist workflow. Think step by step before arriving at any conclusion.
 
-[1] HEART RATE
-━━━━━━━━━━━━━━
-Rate: ___ bpm
-Category: [ ] Bradycardia <60 | [ ] Normal 60-100 | [ ] Tachycardia >100
+Systematic interpretation order:
+1. TECHNICAL QUALITY — lead quality, artifact, baseline wander, calibration (10mm/mV standard)
+2. RATE — calculate ventricular and atrial rate separately if different
+3. RHYTHM — identify the dominant rhythm; note any secondary rhythms or ectopy
+4. AXIS — frontal plane QRS axis (normal −30° to +90°); note P and T axes if abnormal
+5. INTERVALS
+   - PR interval (normal 120–200ms; short <120ms, long >200ms)
+   - QRS duration (normal <120ms; wide if ≥120ms)
+   - QT interval and QTc (Bazett's formula; normal QTc <440ms men, <460ms women)
+6. P WAVE — morphology, duration, amplitude, biphasic in V1 (LAE/RAE)
+7. QRS MORPHOLOGY
+   - Amplitude (LVH: Sokolow-Lyon, Cornell criteria; RVH criteria)
+   - Bundle branch blocks (LBBB, RBBB: complete vs incomplete)
+   - Fascicular blocks (LAFB, LPFB)
+   - Pathological Q waves (location, duration >40ms, depth >25% R)
+   - R wave progression (V1–V6); poor R wave progression
+   - Delta waves / pre-excitation (WPW)
+8. ST SEGMENTS — evaluate each lead systematically
+   - Elevation: STEMI (location, territory), early repolarization, Brugada, pericarditis
+   - Depression: ischemia, reciprocal changes, strain
+9. T WAVES — lead-by-lead if abnormal
+   - Inversion: ischemia, strain, PE (S1Q3T3), Wellens syndrome
+   - Hyperacute: early STEMI, hyperkalemia
+   - Peaked: hyperkalemia, vagal tone
+10. U WAVES — presence, polarity (hypokalemia if prominent)
+11. SPECIFIC PATTERN CHECKLIST — explicitly check for:
+    □ STEMI (anterior/inferior/lateral/posterior/RV) — include culprit artery if identifiable
+    □ NSTEMI / UA pattern
+    □ LBBB / RBBB / bifascicular / trifascicular
+    □ LVH / RVH / biventricular hypertrophy
+    □ AF / AFL / SVT / AVNRT / AVRT
+    □ VT / VF / accelerated idioventricular
+    □ WPW / short PR / delta waves
+    □ Long QT / Short QT syndrome
+    □ Brugada pattern (Type 1/2/3)
+    □ Hyperkalemia / Hypokalemia / Hypercalcemia / Hypocalcemia
+    □ Pericarditis (diffuse ST elevation, PR depression)
+    □ Pulmonary embolism (S1Q3T3, RV strain, sinus tach)
+    □ Pacemaker / ICD spikes — sensing/capture/fusion
+12. FINAL INTERPRETATION — concise clinical summary (2-3 sentences max)
+13. DIFFERENTIAL — if uncertain, list top 2-3 differentials with reasoning
+14. URGENCY — classify: routine / urgent (needs same-day review) / critical (needs immediate action)
+15. CONFIDENCE — rate: low / medium / high; list specific caveats if any
 
-[2] PRIMARY RHYTHM
-━━━━━━━━━━━━━━━━━
-Rhythm: ___________________________
-Tick ALL that apply:
-[ ] Normal Sinus Rhythm
-[ ] Sinus Tachycardia
-[ ] Sinus Bradycardia
-[ ] Ventricular Bigeminy
-[ ] Ventricular Trigeminy
-[ ] Atrial Fibrillation
-[ ] Other: _______________
+Be precise. Use standard cardiology terminology. Never guess — if image quality prevents a reliable finding, explicitly state so."""
 
-[3] PVC ANALYSIS
-━━━━━━━━━━━━━━━
-PVCs Present: [ ] YES  [ ] NO
-If YES:
-  Morphology: [ ] LBBB-type  [ ] RBBB-type  [ ] Other
-  Axis: [ ] Inferior  [ ] Superior  [ ] Normal
-  RVOT Origin Likely: [ ] YES  [ ] NO
-  Evidence for RVOT:
-    [ ] Tall R in II, III, aVF
-    [ ] LBBB morphology in V1
-    [ ] Late precordial transition (V4-V5)
-    [ ] Monophasic R in inferior leads
-  Compensatory Pause: [ ] YES  [ ] NO
-  P wave before PVC: [ ] YES  [ ] NO
-  QRS width of PVC: ___ ms
+ECG_USER_PROMPT = """Perform a complete systematic ECG interpretation of this 12-lead ECG image.
 
-[4] INTERVALS
-━━━━━━━━━━━━
-PR Interval:  ___ ms  [ ] Normal | [ ] Short | [ ] Prolonged
-QRS Duration: ___ ms  [ ] Narrow  | [ ] Wide
-QT Interval:  ___ ms  [ ] Normal | [ ] Short | [ ] Prolonged
-QTc:          ___ ms  [ ] Normal | [ ] Borderline | [ ] Prolonged
-
-[5] CARDIAC AXIS
-━━━━━━━━━━━━━━━
-QRS Axis: ___ degrees
-[ ] Normal (-30 to +90)
-[ ] Left Axis Deviation
-[ ] Right Axis Deviation
-[ ] Extreme Axis
-
-[6] WAVEFORM FINDINGS
-━━━━━━━━━━━━━━━━━━━━
-P Waves:    [ ] Normal | [ ] Absent | [ ] Abnormal → ___________
-QRS:        [ ] Narrow | [ ] Wide   | [ ] Delta wave present
-ST Segment: [ ] Normal | [ ] Elevated in: ___ | [ ] Depressed in: ___
-T Waves:    [ ] Normal | [ ] Inverted in: ___ | [ ] Peaked in: ___
-Q Waves:    [ ] None   | [ ] Pathological in: ___
-
-[7] SPECIAL PATTERNS
-━━━━━━━━━━━━━━━━━━━
-[ ] LVH (Sokolow-Lyon >35mm)
-[ ] RVH
-[ ] LBBB
-[ ] RBBB
-[ ] WPW / Pre-excitation
-[ ] Brugada Pattern
-[ ] Early Repolarization
-[ ] STEMI Pattern
-[ ] None of the above
-
-[8] FINAL IMPRESSION
-━━━━━━━━━━━━━━━━━━━
-Primary Diagnosis: _________________________________
-Secondary Findings: _________________________________
-Urgency Level: [ ] Routine | [ ] Soon | [ ] ⚠️ URGENT
-Recommended Action: _________________________________
-
-═══════════════════════════════════════════
-⚠️ DISCLAIMER: For clinical reference only.
-Final interpretation must be confirmed by
-a licensed physician before any treatment.
-═══════════════════════════════════════════
-
-RULES YOU MUST FOLLOW:
-- Fill EVERY field
-- Use ONLY the format above
-- No paragraphs outside the format
-- No introductions or conclusions
-- Tick boxes must be filled as [✓]
-- Unknown values = "Unable to measure"
-- If URGENT finding detected, state it in 
-  red caps: ⚠️ URGENT: [reason]
-"""
+Return your response as a JSON object with EXACTLY this structure (no markdown, no extra text):
+{
+  "technical_quality": "string",
+  "rate": {
+    "ventricular_bpm": "string",
+    "atrial_bpm": "string"
+  },
+  "rhythm": "string",
+  "axis": {
+    "qrs_degrees": "string",
+    "classification": "normal | LAD | RAD | extreme"
+  },
+  "intervals": {
+    "pr_ms": "string",
+    "qrs_ms": "string",
+    "qt_ms": "string",
+    "qtc_ms": "string",
+    "qtc_formula": "Bazett"
+  },
+  "p_wave": "string",
+  "qrs_morphology": "string",
+  "st_segments": "string",
+  "t_waves": "string",
+  "u_waves": "string",
+  "specific_patterns": ["string"],
+  "final_interpretation": "string",
+  "differential": ["string"],
+  "urgency": "routine | urgent | critical",
+  "confidence": "low | medium | high",
+  "caveats": "string or null"
+}"""
 
 
 async def interpret_ecg(image_bytes: bytes, filename: str):
@@ -130,23 +115,25 @@ async def interpret_ecg(image_bytes: bytes, filename: str):
         logger.info(f"Sending ECG image {filename} to GPT-5 Vision for interpretation")
         
         response = await client.chat.completions.create(
-            model="gpt-5.1-2025-11-13",
+            model="gpt-5.4",
             messages=[
+                {"role": "system", "content": ECG_SYSTEM_PROMPT},
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": ECG_PROMPT},
+                        {"type": "text", "text": ECG_USER_PROMPT},
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:{mime_type};base64,{base64_image}"
+                                "url": f"data:{mime_type};base64,{base64_image}",
+                                "detail": "high"
                             }
                         }
                     ]
                 }
             ],
-            max_completion_tokens=2000,
-            temperature=1
+            max_completion_tokens=8000,
+            reasoning_effort="high"
         )
         
         content = response.choices[0].message.content
@@ -160,23 +147,42 @@ async def interpret_ecg(image_bytes: bytes, filename: str):
 
 def parse_ecg_response(content: str):
     """
-    Parses the GPT response to extract the report.
-    Since the new prompt follows a strict text format, we return the entire content 
-    as both the clinical summary and raw content for the frontend to display.
+    Parses the GPT response to extract structured ECG data.
+    The response is expected to be a JSON object matching the cardiological schema.
+    Returns a dict containing structured_data, a clinical_summary, and raw_content.
     """
     try:
-        # The new prompt produces a single formatted clinical report.
-        # We return it in clinical_summary to maintain compatibility with existing API consumers.
+        # Strip markdown fences if present
+        cleaned_content = content.strip()
+        if cleaned_content.startswith("```"):
+            parts = cleaned_content.split("```")
+            cleaned_content = parts[1].strip()
+            if cleaned_content.startswith("json"):
+                cleaned_content = cleaned_content[4:].strip()
+
+        # Try to parse as JSON
+        structured_data = json.loads(cleaned_content)
+        
+        # If successfully parsed, create a nice summary from it
+        summary_parts = []
+        if "final_interpretation" in structured_data:
+            summary_parts.append(f"INTERPRETATION: {structured_data['final_interpretation']}")
+        if "urgency" in structured_data:
+            icon = {"critical": "🔴", "urgent": "🟡", "routine": "🟢"}.get(structured_data["urgency"].lower(), "⚪")
+            summary_parts.append(f"URGENCY: {icon} {structured_data['urgency'].upper()}")
+        
+        clinical_summary = "\n".join(summary_parts) if summary_parts else content
+
         return {
-            "structured_data": None,
-            "clinical_summary": content,
+            "structured_data": structured_data,
+            "clinical_summary": clinical_summary,
             "raw_content": content
         }
     except Exception as e:
-        logger.error(f"Error parsing ECG response: {str(e)}")
+        logger.warning(f"Failed to parse ECG JSON: {e}")
         return {
             "structured_data": None,
-            "clinical_summary": None,
+            "clinical_summary": content,
             "raw_content": content,
-            "error": "Failed to parse response structure"
+            "error": "Format improvement enabled - raw content returned"
         }

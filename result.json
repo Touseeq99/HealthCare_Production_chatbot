@@ -1,0 +1,52 @@
+{
+  "technical_quality": "Diagnostic-quality photo of a paper ECG with mild baseline wander/perspective distortion; all leads are interpretable. Standard calibration appears to be 25 mm/s and 10 mm/mV.",
+  "rate": {
+    "ventricular_bpm": "approximately 95",
+    "atrial_bpm": "approximately 75"
+  },
+  "rhythm": "Sinus rhythm with frequent monomorphic premature ventricular complexes, predominantly in a ventricular trigeminy pattern.",
+  "axis": {
+    "qrs_degrees": "approximately +110",
+    "classification": "RAD"
+  },
+  "intervals": {
+    "pr_ms": "approximately 160",
+    "qrs_ms": "approximately 90 on sinus beats (PVCs approximately 140-160)",
+    "qt_ms": "approximately 380",
+    "qtc_ms": "approximately 430",
+    "qtc_formula": "Bazett"
+  },
+  "p_wave": "Sinus P waves are present before conducted beats and are upright in the inferior leads; no definite right or left atrial enlargement is identified.",
+  "qrs_morphology": "Conducted QRS complexes are narrow with rightward frontal axis. Frequent unifocal PVCs are present. R-wave progression is acceptable across the precordium. No definite bundle branch block, no convincing pathologic Q waves, no clear LVH/RVH by voltage, and no delta waves/pre-excitation.",
+  "st_segments": "Mild diffuse/downsloping ST-segment depression on sinus beats, most evident in inferolateral and anterolateral leads; no focal ST-segment elevation or convincing reciprocal STEMI pattern.",
+  "t_waves": "T waves are flattened to mildly inverted on sinus beats, particularly in the anterior/lateral and inferior leads; no hyperacute or peaked T waves.",
+  "u_waves": "Prominent positive U waves are present, especially in V2-V6 and also visible in the inferior leads, with apparent QU prolongation.",
+  "specific_patterns": [
+    "No STEMI pattern (no focal ST elevation or convincing reciprocal acute infarct pattern)",
+    "Frequent monomorphic PVCs/ventricular trigeminy",
+    "No atrial fibrillation, atrial flutter, or regular SVT",
+    "No sustained ventricular tachycardia",
+    "No bundle branch block; possible rightward fascicular conduction abnormality/LPFB is not definitive",
+    "No WPW or other pre-excitation",
+    "Hypokalemia pattern: ST depression, T-wave flattening/inversion, prominent U waves, and ventricular ectopy",
+    "No Brugada pattern",
+    "No pacemaker/ICD spikes"
+  ],
+  "final_interpretation": "Sinus rhythm with frequent monomorphic PVCs and right axis deviation. The combination of diffuse ST depression, T-wave flattening/inversion, and prominent U waves is most consistent with hypokalemia/electrolyte disturbance causing ventricular ectopy; no STEMI is seen.",
+  "differential": [
+    "Hypokalemia (most likely): prominent U waves, T-wave flattening, ST depression, and frequent ventricular ectopy strongly support this",
+    "Digoxin effect with or without concomitant hypokalemia: can cause scooped ST depression and ventricular ectopy if clinically relevant",
+    "Subendocardial ischemia/NSTEMI: diffuse ST depression can be ischemic, but the marked U waves and overall pattern favor electrolyte disturbance over acute coronary occlusion"
+  ],
+  "urgency": "urgent",
+  "confidence": "medium",
+  "caveats": "Single photographed tracing without a long rhythm strip; frequent PVCs and prominent U waves make rate and QT/QTc estimation approximate. Axis assessment is based on photographed limb leads and could be affected by lead placement or image distortion.",
+  "_meta": {
+    "model": "gpt-5.4-2026-03-05",
+    "reasoning_effort": "high",
+    "prompt_tokens": 2830,
+    "completion_tokens": 7377,
+    "image_path": "ecg.jpeg",
+    "image_detail": "original"
+  }
+}
