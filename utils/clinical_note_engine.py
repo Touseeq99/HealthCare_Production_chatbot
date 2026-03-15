@@ -182,18 +182,24 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
     """Convert the structured patient JSON into a readable prompt string."""
     lines = [f"OUTPUT TYPE REQUESTED: {output_type}", ""]
 
+    def _v(val, default="N/A"):
+        """Null-safe string converter."""
+        if val is None:
+            return str(default)
+        return str(val)
+
     # --- Patient Identification ---
     pid = patient_data.get("patient_identification", {})
     lines.append("=== PATIENT IDENTIFICATION ===")
-    lines.append(f"Initials: {pid.get('initials', 'N/A')}")
-    lines.append(f"MRN: {pid.get('mrn', 'N/A')}")
-    lines.append(f"DOB: {pid.get('dob', 'N/A')}")
-    lines.append(f"Age: {pid.get('age', 'N/A')}")
-    lines.append(f"Sex: {pid.get('sex', 'N/A')}")
-    lines.append(f"Location: {pid.get('location', 'N/A')}")
-    lines.append(f"Date of Admission: {pid.get('date_of_admission', 'N/A')}")
-    lines.append(f"Date of Discharge: {pid.get('date_of_discharge', 'N/A')}")
-    lines.append(f"Responsible Consultant: {pid.get('responsible_consultant', 'N/A')}")
+    lines.append(f"Initials: {_v(pid.get('initials'))}")
+    lines.append(f"MRN: {_v(pid.get('mrn'))}")
+    lines.append(f"DOB: {_v(pid.get('dob'))}")
+    lines.append(f"Age: {_v(pid.get('age'))}")
+    lines.append(f"Sex: {_v(pid.get('sex'))}")
+    lines.append(f"Location: {_v(pid.get('location'))}")
+    lines.append(f"Date of Admission: {_v(pid.get('date_of_admission'))}")
+    lines.append(f"Date of Discharge: {_v(pid.get('date_of_discharge'))}")
+    lines.append(f"Responsible Consultant: {_v(pid.get('responsible_consultant'))}")
     lines.append("")
 
     # --- Presenting Complaint ---
@@ -201,8 +207,8 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
     lines.append("=== PRESENTING COMPLAINT ===")
     selected_pc = [k for k, v in pc.get("complaints", {}).items() if v]
     lines.append(f"Selected: {', '.join(selected_pc) if selected_pc else 'None specified'}")
-    lines.append(f"Other: {pc.get('other_complaint', '')}")
-    lines.append(f"Duration of symptoms: {pc.get('duration', 'N/A')}")
+    lines.append(f"Other: {_v(pc.get('other_complaint'), '')}")
+    lines.append(f"Duration of symptoms: {_v(pc.get('duration'))}")
     lines.append("")
 
     # --- Key Associated Symptoms ---
@@ -232,10 +238,10 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
     clinical = exam.get("clinical_findings", {})
     lines.append("=== EXAMINATION FINDINGS ===")
     lines.append("Vitals:")
-    lines.append(f"  Heart Rate: {vitals.get('heart_rate', 'N/A')}")
-    lines.append(f"  Blood Pressure: {vitals.get('blood_pressure', 'N/A')}")
-    lines.append(f"  O2 Saturation: {vitals.get('oxygen_saturation', 'N/A')}")
-    lines.append(f"  Temperature: {vitals.get('temperature', 'N/A')}")
+    lines.append(f"  Heart Rate: {_v(vitals.get('heart_rate'))}")
+    lines.append(f"  Blood Pressure: {_v(vitals.get('blood_pressure'))}")
+    lines.append(f"  O2 Saturation: {_v(vitals.get('oxygen_saturation'))}")
+    lines.append(f"  Temperature: {_v(vitals.get('temperature'))}")
     lines.append("Clinical Findings:")
     selected_cf = [k for k, v in clinical.items() if v]
     lines.append(f"  {', '.join(selected_cf) if selected_cf else 'None documented'}")
@@ -244,11 +250,11 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
     # --- ECG ---
     ecg = patient_data.get("ecg", {})
     lines.append("=== ECG ===")
-    lines.append(f"Rhythm: {ecg.get('rhythm', 'N/A')}")
-    lines.append(f"Heart Rate: {ecg.get('heart_rate', 'N/A')}")
-    lines.append(f"Conduction Abnormalities: {ecg.get('conduction_abnormalities', 'N/A')}")
-    lines.append(f"ST/T Changes: {ecg.get('st_t_changes', 'N/A')}")
-    lines.append(f"QT Interval: {ecg.get('qt_interval', 'N/A')}")
+    lines.append(f"Rhythm: {_v(ecg.get('rhythm'))}")
+    lines.append(f"Heart Rate: {_v(ecg.get('heart_rate'))}")
+    lines.append(f"Conduction Abnormalities: {_v(ecg.get('conduction_abnormalities'))}")
+    lines.append(f"ST/T Changes: {_v(ecg.get('st_t_changes'))}")
+    lines.append(f"QT Interval: {_v(ecg.get('qt_interval'))}")
     lines.append(f"ECG Image Uploaded: {'Yes' if ecg.get('image_uploaded') else 'No'}")
     lines.append("")
 
@@ -256,13 +262,13 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
     imaging = patient_data.get("cardiac_imaging", {})
     echo = imaging.get("echocardiography", {})
     lines.append("=== CARDIAC IMAGING (Echocardiography) ===")
-    lines.append(f"LVEF: {echo.get('lvef', 'N/A')}%")
-    lines.append(f"LV Size: {echo.get('lv_size', 'N/A')}")
-    lines.append(f"RV Function: {echo.get('rv_function', 'N/A')}")
-    lines.append(f"LV Dilation: {echo.get('lv_dilation', 'N/A')}")
-    lines.append(f"Regional Wall Motion Abnormality: {echo.get('rwma', 'N/A')}")
-    lines.append(f"Significant Valve Disease: {echo.get('significant_valve_disease', 'N/A')}")
-    lines.append(f"Valvular Disease Detail: {echo.get('valvular_disease', 'N/A')}")
+    lines.append(f"LVEF: {_v(echo.get('lvef'))}%")
+    lines.append(f"LV Size: {_v(echo.get('lv_size'))}")
+    lines.append(f"RV Function: {_v(echo.get('rv_function'))}")
+    lines.append(f"LV Dilation: {_v(echo.get('lv_dilation'))}")
+    lines.append(f"Regional Wall Motion Abnormality: {_v(echo.get('rwma'))}")
+    lines.append(f"Significant Valve Disease: {_v(echo.get('significant_valve_disease'))}")
+    lines.append(f"Valvular Disease Detail: {_v(echo.get('valvular_disease'))}")
     lines.append("")
 
     # --- Key Investigations ---
@@ -271,14 +277,14 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
     other_inv = inv.get("other_investigations", {})
     lines.append("=== KEY INVESTIGATIONS ===")
     lines.append("Laboratory Tests:")
-    lines.append(f"  Troponin: {labs.get('troponin', 'N/A')}")
-    lines.append(f"  BNP/NT-proBNP: {labs.get('bnp_nt_probnp', 'N/A')}")
-    lines.append(f"  Creatinine: {labs.get('creatinine', 'N/A')}")
-    lines.append(f"  eGFR: {labs.get('egfr', 'N/A')}")
-    lines.append(f"  Haemoglobin: {labs.get('haemoglobin', 'N/A')}")
-    lines.append(f"  Electrolytes: {labs.get('electrolytes', 'N/A')}")
-    lines.append(f"  CRP: {labs.get('crp', 'N/A')}")
-    lines.append(f"  D-Dimer: {labs.get('d_dimer', 'N/A')}")
+    lines.append(f"  Troponin: {_v(labs.get('troponin'))}")
+    lines.append(f"  BNP/NT-proBNP: {_v(labs.get('bnp_nt_probnp'))}")
+    lines.append(f"  Creatinine: {_v(labs.get('creatinine'))}")
+    lines.append(f"  eGFR: {_v(labs.get('egfr'))}")
+    lines.append(f"  Haemoglobin: {_v(labs.get('haemoglobin'))}")
+    lines.append(f"  Electrolytes: {_v(labs.get('electrolytes'))}")
+    lines.append(f"  CRP: {_v(labs.get('crp'))}")
+    lines.append(f"  D-Dimer: {_v(labs.get('d_dimer'))}")
     lines.append("Other Investigations:")
     selected_oi = [k for k, v in other_inv.items() if v]
     lines.append(f"  {', '.join(selected_oi) if selected_oi else 'None'}")
@@ -286,7 +292,7 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
 
     # --- Diagnosis ---
     lines.append("=== DIAGNOSIS ===")
-    lines.append(f"Primary Diagnosis: {patient_data.get('primary_diagnosis', 'N/A')}")
+    lines.append(f"Primary Diagnosis: {_v(patient_data.get('primary_diagnosis'))}")
     lines.append("")
 
     # --- Treatment ---
@@ -301,9 +307,9 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
     lines.append("=== MEDICATION LIST AT DISCHARGE ===")
     if meds:
         for med in meds:
-            name = med.get("name", "Unknown")
-            dose = med.get("dose", "")
-            freq = med.get("frequency", "")
+            name = _v(med.get("name"), "Unknown")
+            dose = _v(med.get("dose"), "")
+            freq = _v(med.get("frequency"), "")
             lines.append(f"  - {name}: {dose} {freq}")
     else:
         lines.append("  None documented")
@@ -312,8 +318,8 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
     # --- Clinical Course ---
     course = patient_data.get("clinical_course", {})
     lines.append("=== CLINICAL COURSE ===")
-    lines.append(f"Hospital Course: {course.get('hospital_course_summary', 'N/A')}")
-    lines.append(f"Complications: {course.get('complications', 'N/A')}")
+    lines.append(f"Hospital Course: {_v(course.get('hospital_course_summary'))}")
+    lines.append(f"Complications: {_v(course.get('complications'))}")
     lines.append("")
 
     # --- Discharge Plan ---
@@ -332,7 +338,7 @@ def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
 
     # --- Additional Notes ---
     lines.append("=== ADDITIONAL CLINICAL NOTES ===")
-    lines.append(patient_data.get("additional_clinical_notes", "None"))
+    lines.append(_v(patient_data.get("additional_clinical_notes"), "None"))
     lines.append("")
 
     lines.append("Generate the document now. Return valid JSON only.")
