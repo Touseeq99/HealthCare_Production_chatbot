@@ -169,7 +169,7 @@ def analyze_ecg(
 
     request_kwargs = dict(
         model=model,
-        max_completion_tokens=8000,
+        max_completion_tokens=16000,
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             {

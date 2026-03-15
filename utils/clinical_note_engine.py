@@ -1,11 +1,10 @@
 """
-AI Clinical Note Engine
-========================
-Transforms raw clinical input into structured, legally-safe medical notes
-using GPT-4.1-mini with strict conservative/legal wording rules.
+AI Clinical Note Engine — Cardiology Edition
+=============================================
+Generates structured clinical documents (Clinical Note, Handover Note,
+Discharge Letter) from a rich, structured cardiology patient dataset.
 
-Supported note types: SOAP, Progress Note, Discharge Summary,
-                      Referral Letter, OPD Note
+Also provides standalone blood-test interpretation helpers.
 """
 
 import json
@@ -21,201 +20,395 @@ client = AsyncOpenAI()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# System prompt — injected once per request
+# Shared safety rules injected into every prompt
 # ---------------------------------------------------------------------------
-CLINICAL_NOTE_SYSTEM_PROMPT = """
-You are a clinical documentation AI called "AI Clinical Note," embedded in a doctor-assist tool.
-Your ONLY job is to transform raw clinical input into a structured, professional, legally-safe medical note.
-
-You ASSIST — the doctor decides. You must NEVER give direct clinical advice, diagnoses, or treatment decisions as final recommendations.
-
-## ABSOLUTE RULES (NEVER BREAK THESE)
+_SAFETY_RULES = """
+## ABSOLUTE RULES (NEVER BREAK)
 - NEVER fabricate clinical data, lab values, or findings not present in the input.
-- NEVER output a definitive diagnosis without hedge language.
-- NEVER include patient identifiers unless explicitly provided in the input.
-- ALWAYS use conservative/hedged language: "consistent with," "suggestive of," "may represent," "cannot exclude."
+- NEVER output a definitive diagnosis without hedge language ("consistent with", "suggestive of", "may represent", "cannot exclude").
+- NEVER include patient full name — use initials only.
+- ALWAYS use conservative/hedged language.
 - NEVER make statements implying negligence or legal liability.
 - NEVER use percentage numbers (e.g., "85%") for likelihood.
 - ALWAYS include the disclaimer field in every response.
 - Return ONLY valid JSON — no backticks, no markdown, no preamble.
 
 ## FORMATTING & STYLE RULES
-- **Heavy Use of Bullet Points**: Use bullet points for almost all clinical lists (history, symptoms, medications, exam findings, and management plans).
-- **Rich Markdown Formatting**: Use **bold text** for critical findings, abnormal values, and primary diagnoses/conclusions.
-- **Structural Clarity**: Use clear section headers in ALL CAPS (e.g., SUBJECTIVE, ASSESSMENT) followed by a newline.
-- **Spacing**: Always separate major sections in `generated_note` with a double newline for maximum readability.
-- **Professional Tone**: Maintain a formal, medical reporting style with high scanability.
+- Use **bold** for critical findings, abnormal values, primary diagnoses.
+- Use bullet points for lists (history, symptoms, medications, exam findings, plans).
+- Use clear SECTION HEADERS in ALL CAPS followed by a newline.
+- Separate major sections with a double newline.
+- Maintain formal, medical reporting style with high scanability.
+"""
 
-## NOTE TYPE → SECTION MAPPING
-SOAP                → SUBJECTIVE | OBJECTIVE | ASSESSMENT | PLAN
-Progress Note       → INTERVAL HISTORY | EXAMINATION | ASSESSMENT | PLAN
-Discharge Summary   → ADMISSION DIAGNOSIS | HOSPITAL COURSE | DISCHARGE CONDITION | DISCHARGE PLAN | FOLLOW-UP
-Referral Letter     → REASON FOR REFERRAL | CLINICAL SUMMARY | INVESTIGATIONS | SPECIFIC REQUEST
-OPD Note            → PRESENTING COMPLAINT | HISTORY | EXAMINATION | IMPRESSION | MANAGEMENT
+# ---------------------------------------------------------------------------
+# SYSTEM PROMPTS — one per output type
+# ---------------------------------------------------------------------------
 
-## PROCESSING RULES
+CLINICAL_NOTE_SYSTEM_PROMPT = f"""
+You are a clinical documentation AI called "AI Clinical Note," embedded in a cardiology doctor-assist tool.
+Your ONLY job is to transform a structured cardiology patient dataset into a professional, legally-safe clinical note.
+{_SAFETY_RULES}
 
-### 1. DATA NORMALIZATION
-- Expand shorthand (e.g., "c/o CP x2d" → "complains of chest pain for 2 days", "HTN" → "hypertension").
-- Use bulleted lists for all extracted clinical data points.
-- Ensure whitespace between categorized items.
+## CARDIOLOGY CLINICAL NOTE SECTIONS
+PATIENT IDENTIFICATION | PRESENTING COMPLAINT | HISTORY OF PRESENTING COMPLAINT |
+RELEVANT MEDICAL HISTORY | CARDIOVASCULAR RISK FACTORS | EXAMINATION FINDINGS |
+ECG FINDINGS | CARDIAC IMAGING | KEY INVESTIGATIONS | LAB INTERPRETATION |
+DIAGNOSIS | TREATMENT DURING ADMISSION | MEDICATION LIST | CLINICAL COURSE |
+DISCHARGE PLAN | LIFESTYLE ADVICE | ADDITIONAL NOTES
 
-### 2. ECG INTERPRETATION (only if include_ecg=true AND ecg_data is not null)
-- Add "ECG Findings:" subsection under OBJECTIVE or relevant section.
-- Describe rhythm, rate, intervals, and axis using a bulleted list.
+## BLOOD TEST INTERPRETATION RULES
+When lab values are provided, interpret them using these thresholds:
+- eGFR: ≥90 Normal | 60-89 Mild CKD | 30-59 Moderate CKD | 15-29 Severe CKD | <15 Kidney Failure
+- Troponin: Flag as **[ELEVATED]** if above reference range; indicate High Sensitivity if applicable
+- CRP: <10 mg/L Normal | 10-100 Slightly-moderately elevated | >100 Markedly elevated
+- D-Dimer: Flag as **[ELEVATED]** if above age-adjusted cutoff; note PE/DVT risk relevance
 
-### 3. LAB INTERPRETATION (only if include_labs=true AND lab_data is not null)
-- Add "Laboratory Results:" subsection.
-- List results clearly; tag abnormal values with **[HIGH]** or **[LOW]** in bold.
-
-### 4. GUIDELINES ALIGNMENT
-- Use standard ICD-compatible medical terminology.
-- Reference SCOREs (e.g., Wells, HEART) via bolded indicators.
-
-### 5. DIFFERENTIAL DIAGNOSIS (only if include_differential=true)
-- Add a bulleted list of 3-5 differentials under ASSESSMENT.
-- **PROBABILITY BANDS ONLY**: NEVER use percentages. Use these bands ONLY:
-    - High Likelihood
-    - Moderate Likelihood
-    - Low–Moderate Likelihood
-    - Low Likelihood
-- **DISTINCT RANKING**: Assign different bands to conditions to show meaningful clinical separation.
-- Format: "- **[Likelihood Band]**: **[Diagnosis]** — [brief clinical reasoning]"
-
-## OUTPUT FORMAT (STRICT — valid JSON only)
-{
-  "note_type": "<selected type>",
-  "generated_note": "<full structured note with bolded terms, sections, and frequent bullet points>",
-  "sections": {
-    "<SECTION_NAME>": "..."
-  },
-  "warnings": ["<missing critical data or flags, empty array if none>"],
+## OUTPUT FORMAT (strict JSON)
+{{
+  "output_type": "CLINICAL_NOTE",
+  "note_type": "<subtype if SOAP/OPD/etc, else CARDIOLOGY>",
+  "generated_note": "<full structured note>",
+  "sections": {{ "<SECTION_NAME>": "<section content>" }},
+  "warnings": ["<missing data flags, empty array if none>"],
   "disclaimer": "This note was AI-generated and must be reviewed and approved by the treating physician before clinical or legal use."
-}
+}}
+"""
 
-If the input is too vague or incomplete to generate a safe note, populate warnings[] with specific issues and return what partial output is possible.
+HANDOVER_NOTE_SYSTEM_PROMPT = f"""
+You are a clinical documentation AI called "AI Clinical Note," embedded in a cardiology doctor-assist tool.
+Your ONLY job is to transform a structured cardiology patient dataset into a concise, actionable HANDOVER NOTE for an incoming clinical team.
+{_SAFETY_RULES}
+
+## HANDOVER NOTE STRUCTURE
+PATIENT SUMMARY | ACTIVE ISSUES | RECENT CHANGES | OUTSTANDING TASKS | OVERNIGHT CONCERNS | ESCALATION CRITERIA
+
+## HANDOVER NOTE STYLE RULES
+- Be concise — each section should be scannable in under 30 seconds.
+- Use SBAR framework where applicable (Situation, Background, Assessment, Recommendation).
+- Flag critical abnormals with **[ALERT]** tag.
+- Outstanding tasks must use checkbox format: "☐ Task description"
+
+## OUTPUT FORMAT (strict JSON)
+{{
+  "output_type": "HANDOVER_NOTE",
+  "generated_note": "<full handover note>",
+  "sections": {{ "<SECTION_NAME>": "<section content>" }},
+  "warnings": ["<missing data flags>"],
+  "disclaimer": "This note was AI-generated and must be reviewed and approved by the treating physician before clinical or legal use."
+}}
+"""
+
+DISCHARGE_LETTER_SYSTEM_PROMPT = f"""
+You are a clinical documentation AI called "AI Clinical Note," embedded in a cardiology doctor-assist tool.
+Your ONLY job is to transform a structured cardiology patient dataset into a formal DISCHARGE LETTER addressed from the responsible consultant to the patient's GP/primary care physician.
+{_SAFETY_RULES}
+
+## DISCHARGE LETTER STRUCTURE
+PATIENT DETAILS | ADMISSION SUMMARY | CLINICAL FINDINGS | INVESTIGATIONS | 
+DIAGNOSIS | TREATMENT | DISCHARGE MEDICATIONS | FOLLOW-UP PLAN | URGENT SAFETY NET | 
+LIFESTYLE ADVICE | CLOSING REMARKS
+
+## DISCHARGE LETTER STYLE RULES
+- Address: "Dear Dr [GP name if known, else 'Colleague'],"
+- Tone: Formal medical correspondence — third-person ("The patient was admitted...").
+- Lead with admission/discharge dates and primary diagnosis.
+- Medication table format: Name | Dose | Frequency | Duration.
+- End with responsible consultant name and contact.
+
+## OUTPUT FORMAT (strict JSON)
+{{
+  "output_type": "DISCHARGE_LETTER",
+  "generated_note": "<full discharge letter>",
+  "sections": {{ "<SECTION_NAME>": "<section content>" }},
+  "warnings": ["<missing data flags>"],
+  "disclaimer": "This letter was AI-generated and must be reviewed and approved by the treating physician before clinical or legal use."
+}}
+"""
+
+# ---------------------------------------------------------------------------
+# Blood-test standalone interpretation prompt
+# ---------------------------------------------------------------------------
+BLOOD_TEST_SYSTEM_PROMPT = """
+You are a clinical laboratory interpretation AI. Interpret blood test results using evidence-based thresholds.
+Return ONLY valid JSON.
+
+Interpret the following tests if provided (skip any not present):
+
+eGFR (mL/min/1.73m²):
+  ≥90 → Stage G1 Normal or High
+  60–89 → Stage G2 Mildly decreased
+  45–59 → Stage G3a Mildly-moderately decreased
+  30–44 → Stage G3b Moderately-severely decreased
+  15–29 → Stage G4 Severely decreased
+  <15  → Stage G5 Kidney Failure
+
+Troponin I/T (high-sensitivity):
+  Below URL → Normal, ACS unlikely
+  1–2× URL → Borderline — serial measurement recommended
+  >2× URL → Elevated — consistent with myocardial injury
+  (URL = upper reference limit; flag if not provided)
+
+CRP (mg/L):
+  <5 → Normal
+  5–10 → Borderline
+  10–100 → Elevated — bacterial infection/inflammation likely
+  >100 → Markedly elevated — serious bacterial infection/sepsis possible
+
+D-Dimer (mg/L FEU or μg/mL):
+  Below age-adjusted cutoff → VTE unlikely
+  Age-adjusted cutoff = (age × 0.01) μg/mL for age >50
+  Above cutoff → Further imaging recommended to exclude PE/DVT
+
+OUTPUT FORMAT (strict JSON):
+{
+  "interpretations": {
+    "eGFR": { "value": null, "unit": "", "stage": "", "interpretation": "", "flag": "" },
+    "troponin": { "value": null, "unit": "", "interpretation": "", "flag": "" },
+    "CRP": { "value": null, "unit": "", "interpretation": "", "flag": "" },
+    "d_dimer": { "value": null, "unit": "", "interpretation": "", "flag": "" }
+  },
+  "overall_summary": "",
+  "warnings": []
+}
 """
 
 
-def _build_user_message(payload: dict) -> str:
+# ---------------------------------------------------------------------------
+# Helper — flatten structured patient data into a readable user message
+# ---------------------------------------------------------------------------
+
+def _build_cardiology_message(patient_data: dict, output_type: str) -> str:
+    """Convert the structured patient JSON into a readable prompt string."""
+    lines = [f"OUTPUT TYPE REQUESTED: {output_type}", ""]
+
+    # --- Patient Identification ---
+    pid = patient_data.get("patient_identification", {})
+    lines.append("=== PATIENT IDENTIFICATION ===")
+    lines.append(f"Initials: {pid.get('initials', 'N/A')}")
+    lines.append(f"MRN: {pid.get('mrn', 'N/A')}")
+    lines.append(f"DOB: {pid.get('dob', 'N/A')}")
+    lines.append(f"Age: {pid.get('age', 'N/A')}")
+    lines.append(f"Sex: {pid.get('sex', 'N/A')}")
+    lines.append(f"Location: {pid.get('location', 'N/A')}")
+    lines.append(f"Date of Admission: {pid.get('date_of_admission', 'N/A')}")
+    lines.append(f"Date of Discharge: {pid.get('date_of_discharge', 'N/A')}")
+    lines.append(f"Responsible Consultant: {pid.get('responsible_consultant', 'N/A')}")
+    lines.append("")
+
+    # --- Presenting Complaint ---
+    pc = patient_data.get("presenting_complaint", {})
+    lines.append("=== PRESENTING COMPLAINT ===")
+    selected_pc = [k for k, v in pc.get("complaints", {}).items() if v]
+    lines.append(f"Selected: {', '.join(selected_pc) if selected_pc else 'None specified'}")
+    lines.append(f"Other: {pc.get('other_complaint', '')}")
+    lines.append(f"Duration of symptoms: {pc.get('duration', 'N/A')}")
+    lines.append("")
+
+    # --- Key Associated Symptoms ---
+    assoc = patient_data.get("associated_symptoms", {})
+    lines.append("=== KEY ASSOCIATED SYMPTOMS ===")
+    selected_symp = [k for k, v in assoc.items() if v]
+    lines.append(f"{', '.join(selected_symp) if selected_symp else 'None reported'}")
+    lines.append("")
+
+    # --- Relevant Medical History ---
+    rmh = patient_data.get("relevant_medical_history", {})
+    lines.append("=== RELEVANT MEDICAL HISTORY ===")
+    selected_rmh = [k for k, v in rmh.items() if v]
+    lines.append(f"{', '.join(selected_rmh) if selected_rmh else 'None reported'}")
+    lines.append("")
+
+    # --- Cardiovascular Risk Factors ---
+    crf = patient_data.get("cardiovascular_risk_factors", {})
+    lines.append("=== CARDIOVASCULAR RISK FACTORS ===")
+    selected_crf = [k for k, v in crf.items() if v]
+    lines.append(f"{', '.join(selected_crf) if selected_crf else 'None reported'}")
+    lines.append("")
+
+    # --- Examination Findings ---
+    exam = patient_data.get("examination_findings", {})
+    vitals = exam.get("vitals", {})
+    clinical = exam.get("clinical_findings", {})
+    lines.append("=== EXAMINATION FINDINGS ===")
+    lines.append("Vitals:")
+    lines.append(f"  Heart Rate: {vitals.get('heart_rate', 'N/A')}")
+    lines.append(f"  Blood Pressure: {vitals.get('blood_pressure', 'N/A')}")
+    lines.append(f"  O2 Saturation: {vitals.get('oxygen_saturation', 'N/A')}")
+    lines.append(f"  Temperature: {vitals.get('temperature', 'N/A')}")
+    lines.append("Clinical Findings:")
+    selected_cf = [k for k, v in clinical.items() if v]
+    lines.append(f"  {', '.join(selected_cf) if selected_cf else 'None documented'}")
+    lines.append("")
+
+    # --- ECG ---
+    ecg = patient_data.get("ecg", {})
+    lines.append("=== ECG ===")
+    lines.append(f"Rhythm: {ecg.get('rhythm', 'N/A')}")
+    lines.append(f"Heart Rate: {ecg.get('heart_rate', 'N/A')}")
+    lines.append(f"Conduction Abnormalities: {ecg.get('conduction_abnormalities', 'N/A')}")
+    lines.append(f"ST/T Changes: {ecg.get('st_t_changes', 'N/A')}")
+    lines.append(f"QT Interval: {ecg.get('qt_interval', 'N/A')}")
+    lines.append(f"ECG Image Uploaded: {'Yes' if ecg.get('image_uploaded') else 'No'}")
+    lines.append("")
+
+    # --- Cardiac Imaging ---
+    imaging = patient_data.get("cardiac_imaging", {})
+    echo = imaging.get("echocardiography", {})
+    lines.append("=== CARDIAC IMAGING (Echocardiography) ===")
+    lines.append(f"LVEF: {echo.get('lvef', 'N/A')}%")
+    lines.append(f"LV Size: {echo.get('lv_size', 'N/A')}")
+    lines.append(f"RV Function: {echo.get('rv_function', 'N/A')}")
+    lines.append(f"LV Dilation: {echo.get('lv_dilation', 'N/A')}")
+    lines.append(f"Regional Wall Motion Abnormality: {echo.get('rwma', 'N/A')}")
+    lines.append(f"Significant Valve Disease: {echo.get('significant_valve_disease', 'N/A')}")
+    lines.append(f"Valvular Disease Detail: {echo.get('valvular_disease', 'N/A')}")
+    lines.append("")
+
+    # --- Key Investigations ---
+    inv = patient_data.get("key_investigations", {})
+    labs = inv.get("laboratory_tests", {})
+    other_inv = inv.get("other_investigations", {})
+    lines.append("=== KEY INVESTIGATIONS ===")
+    lines.append("Laboratory Tests:")
+    lines.append(f"  Troponin: {labs.get('troponin', 'N/A')}")
+    lines.append(f"  BNP/NT-proBNP: {labs.get('bnp_nt_probnp', 'N/A')}")
+    lines.append(f"  Creatinine: {labs.get('creatinine', 'N/A')}")
+    lines.append(f"  eGFR: {labs.get('egfr', 'N/A')}")
+    lines.append(f"  Haemoglobin: {labs.get('haemoglobin', 'N/A')}")
+    lines.append(f"  Electrolytes: {labs.get('electrolytes', 'N/A')}")
+    lines.append(f"  CRP: {labs.get('crp', 'N/A')}")
+    lines.append(f"  D-Dimer: {labs.get('d_dimer', 'N/A')}")
+    lines.append("Other Investigations:")
+    selected_oi = [k for k, v in other_inv.items() if v]
+    lines.append(f"  {', '.join(selected_oi) if selected_oi else 'None'}")
+    lines.append("")
+
+    # --- Diagnosis ---
+    lines.append("=== DIAGNOSIS ===")
+    lines.append(f"Primary Diagnosis: {patient_data.get('primary_diagnosis', 'N/A')}")
+    lines.append("")
+
+    # --- Treatment ---
+    treatment = patient_data.get("treatment_during_admission", {})
+    selected_tx = [k for k, v in treatment.items() if v]
+    lines.append("=== TREATMENT DURING ADMISSION ===")
+    lines.append(f"{', '.join(selected_tx) if selected_tx else 'None documented'}")
+    lines.append("")
+
+    # --- Medications ---
+    meds = patient_data.get("medication_list_at_discharge", [])
+    lines.append("=== MEDICATION LIST AT DISCHARGE ===")
+    if meds:
+        for med in meds:
+            name = med.get("name", "Unknown")
+            dose = med.get("dose", "")
+            freq = med.get("frequency", "")
+            lines.append(f"  - {name}: {dose} {freq}")
+    else:
+        lines.append("  None documented")
+    lines.append("")
+
+    # --- Clinical Course ---
+    course = patient_data.get("clinical_course", {})
+    lines.append("=== CLINICAL COURSE ===")
+    lines.append(f"Hospital Course: {course.get('hospital_course_summary', 'N/A')}")
+    lines.append(f"Complications: {course.get('complications', 'N/A')}")
+    lines.append("")
+
+    # --- Discharge Plan ---
+    discharge = patient_data.get("discharge_plan", {})
+    selected_dp = [k for k, v in discharge.items() if v]
+    lines.append("=== DISCHARGE PLAN ===")
+    lines.append(f"{', '.join(selected_dp) if selected_dp else 'None documented'}")
+    lines.append("")
+
+    # --- Lifestyle Advice ---
+    lifestyle = patient_data.get("lifestyle_advice", {})
+    selected_la = [k for k, v in lifestyle.items() if v]
+    lines.append("=== LIFESTYLE ADVICE ===")
+    lines.append(f"{', '.join(selected_la) if selected_la else 'None documented'}")
+    lines.append("")
+
+    # --- Additional Notes ---
+    lines.append("=== ADDITIONAL CLINICAL NOTES ===")
+    lines.append(patient_data.get("additional_clinical_notes", "None"))
+    lines.append("")
+
+    lines.append("Generate the document now. Return valid JSON only.")
+    return "\n".join(lines)
+
+
+def _build_blood_test_message(lab_data: dict) -> str:
+    """Build user message for blood test interpretation."""
+    parts = ["Interpret the following blood test results:\n"]
+    if lab_data.get("egfr") is not None:
+        parts.append(f"eGFR: {lab_data['egfr']} {lab_data.get('egfr_unit', 'mL/min/1.73m²')}")
+    if lab_data.get("troponin") is not None:
+        parts.append(f"Troponin: {lab_data['troponin']} {lab_data.get('troponin_unit', '')} (URL: {lab_data.get('troponin_url', 'not provided')})")
+    if lab_data.get("crp") is not None:
+        parts.append(f"CRP: {lab_data['crp']} {lab_data.get('crp_unit', 'mg/L')}")
+    if lab_data.get("d_dimer") is not None:
+        age = lab_data.get("patient_age")
+        age_str = f" | Patient age: {age}" if age else ""
+        parts.append(f"D-Dimer: {lab_data['d_dimer']} {lab_data.get('d_dimer_unit', 'mg/L FEU')}{age_str}")
+    if len(parts) == 1:
+        parts.append("No lab values provided.")
+    parts.append("\nReturn valid JSON only.")
+    return "\n".join(parts)
+
+
+def _select_system_prompt(output_type: str) -> str:
+    mapping = {
+        "CLINICAL_NOTE": CLINICAL_NOTE_SYSTEM_PROMPT,
+        "HANDOVER_NOTE": HANDOVER_NOTE_SYSTEM_PROMPT,
+        "DISCHARGE_LETTER": DISCHARGE_LETTER_SYSTEM_PROMPT,
+    }
+    return mapping.get(output_type.upper(), CLINICAL_NOTE_SYSTEM_PROMPT)
+
+
+# ---------------------------------------------------------------------------
+# Main entry points
+# ---------------------------------------------------------------------------
+
+async def generate_clinical_note(payload: dict) -> dict:
     """
-    Construct the user-turn message from the structured input payload.
+    Generate a clinical document from a structured cardiology patient payload.
+
+    payload keys
+    ------------
+    output_type     : "CLINICAL_NOTE" | "HANDOVER_NOTE" | "DISCHARGE_LETTER"
+    patient_data    : dict — full structured patient form
     """
-    note_type = payload.get("note_type", "SOAP")
+    start = time.time()
+
+    output_type = payload.get("output_type", "CLINICAL_NOTE").upper()
+    patient_data = payload.get("patient_data", {})
+
+    # Legacy plain-text path (backward compat with old raw_input based calls)
     raw_input = payload.get("raw_input", "")
     ecg_data = payload.get("ecg_data")
     lab_data = payload.get("lab_data")
     options = payload.get("options", {})
 
-    include_ecg = options.get("include_ecg", False) and ecg_data
-    include_labs = options.get("include_labs", False) and lab_data
-    include_differential = options.get("include_differential", False)
-
-    parts = [
-        f"NOTE TYPE: {note_type}",
-        f"\nRAW CLINICAL INPUT:\n{raw_input}",
-    ]
-
-    if include_ecg:
-        parts.append(f"\nECG DATA (include in note):\n{ecg_data}")
+    if patient_data:
+        user_message = _build_cardiology_message(patient_data, output_type)
     else:
-        parts.append("\nECG DATA: Not provided or excluded.")
+        # Fallback: old-style plain text request
+        parts = [f"OUTPUT TYPE: {output_type}", f"\nRAW CLINICAL INPUT:\n{raw_input}"]
+        if options.get("include_ecg") and ecg_data:
+            parts.append(f"\nECG DATA:\n{ecg_data}")
+        if options.get("include_labs") and lab_data:
+            parts.append(f"\nLABORATORY DATA:\n{lab_data}")
+        user_message = "\n".join(parts)
 
-    if include_labs:
-        parts.append(f"\nLABORATORY DATA (include in note):\n{lab_data}")
-    else:
-        parts.append("\nLABORATORY DATA: Not provided or excluded.")
-
-    parts.append(f"\nINCLUDE DIFFERENTIAL DIAGNOSIS: {'Yes' if include_differential else 'No'}")
-    parts.append("\nGenerate the structured clinical note as specified. Return valid JSON only.")
-
-    return "\n".join(parts)
-
-
-def _validate_payload(payload: dict) -> list[str]:
-    """
-    Pre-flight validation — returns a list of warning strings.
-    Does NOT block generation; warnings are passed into the prompt context.
-    """
-    warnings = []
-    valid_note_types = {
-        "SOAP", "Progress Note", "Discharge Summary",
-        "Referral Letter", "OPD Note"
-    }
-
-    note_type = payload.get("note_type", "")
-    if note_type not in valid_note_types:
-        warnings.append(
-            f"Unknown note_type '{note_type}'. "
-            f"Valid types: {', '.join(sorted(valid_note_types))}. Defaulting to SOAP."
-        )
-
-    raw_input = payload.get("raw_input", "").strip()
-    if not raw_input:
-        warnings.append("raw_input is empty. Cannot generate a meaningful clinical note.")
-    elif len(raw_input) < 20:
-        warnings.append(
-            "raw_input is very short. The generated note may be incomplete. "
-            "Please provide more clinical detail."
-        )
-
-    options = payload.get("options", {})
-    if options.get("include_ecg") and not payload.get("ecg_data"):
-        warnings.append("include_ecg is true but ecg_data is null or missing. ECG section will be omitted.")
-    if options.get("include_labs") and not payload.get("lab_data"):
-        warnings.append("include_labs is true but lab_data is null or missing. Lab section will be omitted.")
-
-    return warnings
-
-
-async def generate_clinical_note(payload: dict) -> dict:
-    """
-    Main entry point.
-
-    Parameters
-    ----------
-    payload : dict  — the JSON body matching the AI Clinical Note schema.
-
-    Returns
-    -------
-    dict — parsed JSON response from the model, always including:
-           note_type, generated_note, sections, warnings, disclaimer.
-    """
-    start = time.time()
-
-    pre_warnings = _validate_payload(payload)
-
-    note_type = payload.get("note_type", "SOAP")
-    raw_input = payload.get("raw_input", "").strip()
-
-    # Bail early if there is absolutely nothing to work with
-    if not raw_input:
-        return {
-            "note_type": note_type,
-            "generated_note": "",
-            "sections": {},
-            "warnings": pre_warnings or ["raw_input is empty. No note was generated."],
-            "disclaimer": (
-                "This note was AI-generated and must be reviewed and approved "
-                "by the treating physician before clinical or legal use."
-            ),
-        }
-
-    user_message = _build_user_message(payload)
-
-    # Inform the model of any pre-flight warnings so it can reflect them
-    if pre_warnings:
-        warning_note = "\nPRE-FLIGHT WARNINGS (reflect these in your warnings[] array):\n"
-        warning_note += "\n".join(f"- {w}" for w in pre_warnings)
-        user_message += warning_note
+    system_prompt = _select_system_prompt(output_type)
 
     logger.info(
-        "Generating clinical note",
+        "Generating clinical document",
         extra={
-            "note_type": note_type,
-            "raw_input_length": len(raw_input),
-            "include_ecg": payload.get("options", {}).get("include_ecg", False),
-            "include_labs": payload.get("options", {}).get("include_labs", False),
+            "output_type": output_type,
+            "has_patient_data": bool(patient_data),
         },
     )
 
@@ -223,55 +416,74 @@ async def generate_clinical_note(payload: dict) -> dict:
         response = await client.chat.completions.create(
             model="gpt-4.1-mini",
             messages=[
-                {"role": "system", "content": CLINICAL_NOTE_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_message},
             ],
-            temperature=0.1,        # Near-deterministic for medical documentation
-            max_tokens=2500,
-            response_format={"type": "json_object"},  # Enforce JSON mode
+            temperature=0.1,
+            max_tokens=3000,
+            response_format={"type": "json_object"},
         )
 
         raw_content = response.choices[0].message.content or "{}"
         elapsed = time.time() - start
-        logger.info(f"Clinical note generated in {elapsed:.2f}s")
+        logger.info(f"Clinical document generated in {elapsed:.2f}s")
 
         try:
             result = json.loads(raw_content)
         except json.JSONDecodeError as jde:
-            logger.error(f"JSON parse error from model output: {jde}")
+            logger.error(f"JSON parse error: {jde}")
             return {
-                "note_type": note_type,
+                "output_type": output_type,
+                "note_type": output_type,
                 "generated_note": raw_content,
                 "sections": {},
-                "warnings": [
-                    "Model returned malformed JSON. Raw output preserved in generated_note.",
-                    *pre_warnings,
-                ],
-                "disclaimer": (
-                    "This note was AI-generated and must be reviewed and approved "
-                    "by the treating physician before clinical or legal use."
-                ),
+                "warnings": ["Model returned malformed JSON. Raw output preserved."],
+                "disclaimer": "This note was AI-generated and must be reviewed and approved by the treating physician before clinical or legal use.",
             }
 
-        # Guarantee required fields are always present
-        result.setdefault("note_type", note_type)
+        # Guarantee required fields
+        result.setdefault("output_type", output_type)
+        result.setdefault("note_type", output_type)
         result.setdefault("generated_note", "")
         result.setdefault("sections", {})
         result.setdefault("warnings", [])
         result.setdefault(
             "disclaimer",
-            "This note was AI-generated and must be reviewed and approved "
-            "by the treating physician before clinical or legal use.",
+            "This note was AI-generated and must be reviewed and approved by the treating physician before clinical or legal use.",
         )
-
-        # Merge any pre-flight warnings that the model may not have included
-        existing_warnings = set(result["warnings"])
-        for w in pre_warnings:
-            if w not in existing_warnings:
-                result["warnings"].append(w)
 
         return result
 
     except Exception as exc:
-        logger.error(f"Error generating clinical note: {exc}", exc_info=True)
+        logger.error(f"Error generating clinical document: {exc}", exc_info=True)
+        raise
+
+
+async def interpret_blood_tests(lab_data: dict) -> dict:
+    """
+    Standalone blood test interpretation for eGFR, Troponin, CRP, D-Dimer.
+    """
+    user_message = _build_blood_test_message(lab_data)
+
+    try:
+        response = await client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
+                {"role": "system", "content": BLOOD_TEST_SYSTEM_PROMPT},
+                {"role": "user", "content": user_message},
+            ],
+            temperature=0.0,
+            max_tokens=1000,
+            response_format={"type": "json_object"},
+        )
+
+        raw_content = response.choices[0].message.content or "{}"
+        result = json.loads(raw_content)
+        result.setdefault("interpretations", {})
+        result.setdefault("overall_summary", "")
+        result.setdefault("warnings", [])
+        return result
+
+    except Exception as exc:
+        logger.error(f"Blood test interpretation error: {exc}", exc_info=True)
         raise

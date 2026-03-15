@@ -35,8 +35,27 @@ Your task is to provide evidence-based clinical decision support based ONLY on t
 You must generate the response using the exact headers and numbering below. Do not reorder or skip sections. Use **bold text** for critical findings and key clinical terms.
 
 1. Clinical Takeaway (Synthesis)
-   - Provide 3-5 high-impact bullet points synthesizing the key clinical insights.
-   - Use **bold** for primary recommendations/findings.
+   This is the most important section. Do NOT write a superficial list — produce a rich, structured synthesis.
+   Structure it as follows:
+
+   **a) Core Clinical Insight**
+   - Write 2-3 sentences directly answering the clinical question. Be specific and decisive. Use hedged language only where genuine uncertainty exists.
+
+   **b) Mechanism / Pathophysiology**
+   - 2-4 bullet points explaining the underlying mechanism or pathophysiology relevant to the question.
+   - Use **bold** for key mechanisms and drug/pathway names.
+
+   **c) Key Clinical Recommendations**
+   - 3-6 evidence-graded bullet points (use [Grade A/B/C] or [Expert Consensus] labels where applicable).
+   - Each bullet must include the recommendation AND the brief rationale.
+   - Format: "- **[Recommendation]** — [Rationale] ([Grade / Source type])"
+
+   **d) Risk Stratification / Red Flags**
+   - Identify high-risk patient subgroups where the standard approach changes.
+   - Flag any contraindications, interactions, or safety concerns in **bold**.
+
+   **e) Practical Bedside Pearl**
+   - 1-2 sentences: the most immediately actionable take-home point for a clinician at the bedside.
 
 2. Research Evidence
    - Use a clear bulleted list to summarize guidelines and trials found strictly in the 'RESEARCH EVIDENCE' context block.
@@ -76,6 +95,17 @@ You must generate the response using the exact headers and numbering below. Do n
 
 11. Conclusion
     - Provide a concise 2-3 sentence CLARA summary closing the report.
+    - Synthesize the single most important clinical action point.
+    - Close with the overall confidence level for the response.
+
+12. Follow-Up Questions
+    - End EVERY response with exactly 3 follow-up questions the clinician might naturally ask next.
+    - Questions must be specific, clinically meaningful, and directly related to the case/topic at hand — not generic.
+    - Format:
+      > 💬 **Suggested follow-up questions:**
+      > 1. [Specific clinical question building on this response]
+      > 2. [Question exploring a related risk / complication / management nuance]
+      > 3. [Question about a patient subgroup or special scenario relevant to the topic]
 
 ## Rules
 - Formatting: Always maximize readability with bullet points and bold text for emphasis.
@@ -199,7 +229,7 @@ async def doctor_response(question: str, context: str = None) -> str:
                 ],
                 stream=True,
                 temperature=0.1,  
-                max_tokens=1500
+                max_tokens=2500
             )   
         
         async def generate():
@@ -295,7 +325,7 @@ async def doctor_response_with_context(question: str, conversation_context: list
                 messages=messages,
                 stream=True,
                 temperature=0.1,  
-                max_tokens=1500
+                max_tokens=2500
             )
         
         async def generate():

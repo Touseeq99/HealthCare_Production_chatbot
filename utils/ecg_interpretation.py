@@ -132,7 +132,7 @@ async def interpret_ecg(image_bytes: bytes, filename: str):
                     ]
                 }
             ],
-            max_completion_tokens=8000,
+            max_completion_tokens=16000,
             reasoning_effort="high"
         )
         
